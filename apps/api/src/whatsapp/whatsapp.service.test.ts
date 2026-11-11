@@ -650,6 +650,10 @@ function serviceFactory({
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findUniqueOrThrow: vi.fn().mockResolvedValue(conversation({ labelAssignments: [] })),
     },
+    whatsAppConversationContinuity: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn(),
+    },
     whatsAppAttendance: {
       findMany: vi.fn().mockResolvedValue([]),
     },
@@ -771,6 +775,7 @@ function serviceFactory({
           upsert: prisma.whatsAppPendingContact.upsert,
         },
         whatsAppConversation: prisma.whatsAppConversation,
+        whatsAppConversationContinuity: prisma.whatsAppConversationContinuity,
         whatsAppAttendance: prisma.whatsAppAttendance,
         whatsAppConversationLabel: prisma.whatsAppConversationLabel,
         whatsAppConversationLabelAssignment: prisma.whatsAppConversationLabelAssignment,
@@ -15005,6 +15010,14 @@ describe('WhatsAppService', () => {
       contactName: null,
       status: 'OPEN',
     });
+    const predecessorConversation = conversation({
+      id: 'abababab-abab-4bab-8bab-abababababab',
+      whatsAppConnectionId: 'cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd',
+      clientId: client().id,
+      client: client(),
+      createdAt: new Date('2026-09-10T00:00:00.000Z'),
+    });
+    const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
     const createMessage = vi.fn((args: { data: Record<string, unknown> }) =>
       Promise.resolve(
         conversationMessage({
@@ -15033,7 +15046,7 @@ describe('WhatsAppService', () => {
             .mockResolvedValueOnce(null)
             .mockResolvedValueOnce(createdConversation)
             .mockResolvedValueOnce(createdConversation),
-          findMany: vi.fn().mockResolvedValue([]),
+          findMany: vi.fn().mockResolvedValue([predecessorConversation]),
           count: vi.fn().mockResolvedValue(0),
           aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
           create: vi.fn().mockResolvedValue(createdConversation),
@@ -15056,6 +15069,10 @@ describe('WhatsAppService', () => {
               }),
             ),
           ),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: continuityCreate,
         },
       },
     });
@@ -15096,6 +15113,13 @@ describe('WhatsAppService', () => {
         data: expect.objectContaining({ unreadCount: expect.anything() }),
       }),
     );
+    expect(continuityCreate).toHaveBeenCalledWith({
+      data: {
+        predecessorConversationId: predecessorConversation.id,
+        successorConversationId: createdConversation.id,
+        createdByUserId: 'actor-user-id',
+      },
+    });
     expect(result).toMatchObject({
       reusedConversation: false,
       clientLinked: false,
@@ -16417,6 +16441,229 @@ describe('WhatsAppService', () => {
     expect(prisma.whatsAppConversation.update).not.toHaveBeenCalled();
     expect(realtime.emitMessageCreated).not.toHaveBeenCalled();
     expect(realtime.emitMessageUpdated).toHaveBeenCalledWith(target.id, expect.any(String));
+  });
+});
+
+describe('WhatsApp conversation continuity', () => {
+  const predecessorId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const oldestId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const predecessorConnectionId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+  it('paginates a multi-reconnection history and marks predecessor messages read-only', async () => {
+    const active = conversation();
+    const newest = conversationMessage({
+      id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      conversationId: active.id,
+      createdAt: new Date('2026-11-11T18:00:00.000Z'),
+    });
+    const middle = conversationMessage({
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      conversationId: predecessorId,
+      createdAt: new Date('2026-11-10T18:00:00.000Z'),
+    });
+    const oldest = conversationMessage({
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      conversationId: oldestId,
+      createdAt: new Date('2026-11-09T18:00:00.000Z'),
+    });
+    const continuityFindUnique = vi
+      .fn()
+      .mockImplementation((args: { where: { successorConversationId: string } }) => {
+        if (args.where.successorConversationId === active.id) {
+          return Promise.resolve({ predecessorConversationId: predecessorId });
+        }
+        if (args.where.successorConversationId === predecessorId) {
+          return Promise.resolve({ predecessorConversationId: oldestId });
+        }
+        return Promise.resolve(null);
+      });
+    const { service, prisma } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: active.id }),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: continuityFindUnique,
+        },
+        whatsAppMessage: {
+          findMany: vi.fn().mockResolvedValue([newest, middle, oldest]),
+          count: vi.fn().mockResolvedValue(3),
+        },
+      },
+    });
+
+    const result = await service.listConversationMessages(active.id, { page: 1, limit: 20 });
+
+    expect(prisma.whatsAppMessage.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { conversationId: { in: [active.id, predecessorId, oldestId] } },
+      }),
+    );
+    expect(result.items.map((item) => [item.id, item.isHistorical])).toEqual([
+      [oldest.id, true],
+      [middle.id, true],
+      [newest.id, false],
+    ]);
+  });
+
+  it('links a safe predecessor after an inbound webhook without blocking message persistence', async () => {
+    const active = conversation({
+      clientId: client().id,
+      createdAt: new Date('2026-11-11T18:00:00.000Z'),
+    });
+    const predecessor = conversation({
+      id: predecessorId,
+      whatsAppConnectionId: predecessorConnectionId,
+      clientId: active.clientId,
+      createdAt: new Date('2026-11-10T18:00:00.000Z'),
+    });
+    const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
+    const { service, normalizer } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([predecessor]),
+          create: vi.fn().mockResolvedValue(active),
+          update: vi.fn().mockResolvedValue(active),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: continuityCreate,
+        },
+      },
+    });
+    normalizer.normalize.mockReturnValue(
+      normalizedInbound('Mensagem depois da reconexão', {
+        messageId: 'continuity-webhook-message',
+      }),
+    );
+
+    const result = await service.receiveWebhook({ type: 'Message' });
+
+    expect(result).toMatchObject({
+      processed: true,
+      conversation: { processed: true, action: 'conversation_message_persisted' },
+    });
+    expect(continuityCreate).toHaveBeenCalledWith({
+      data: {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: active.id,
+        createdByUserId: null,
+      },
+    });
+  });
+
+  it('dry-runs and applies the same unique predecessor idempotently', async () => {
+    const active = conversation({
+      clientId: client().id,
+      createdAt: new Date('2026-11-11T18:00:00.000Z'),
+      predecessorLink: null,
+    });
+    const predecessor = conversation({
+      id: predecessorId,
+      whatsAppConnectionId: predecessorConnectionId,
+      clientId: active.clientId,
+      createdAt: new Date('2026-11-10T18:00:00.000Z'),
+    });
+    const continuityCreate = vi.fn().mockResolvedValue({ id: 'continuity-id' });
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConnection: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: active.whatsAppConnectionId,
+            status: 'CONNECTED',
+            connected: true,
+            loggedIn: true,
+          }),
+        },
+        whatsAppConversation: {
+          findMany: vi
+            .fn()
+            .mockResolvedValueOnce([{ id: active.id }])
+            .mockResolvedValueOnce([predecessor])
+            .mockResolvedValueOnce([{ id: active.id }])
+            .mockResolvedValueOnce([predecessor]),
+          findUnique: vi.fn().mockResolvedValue(active),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: continuityCreate,
+        },
+      },
+    });
+
+    const preview = await service.reconcileConversationContinuities(
+      { successorConnectionId: active.whatsAppConnectionId, apply: false },
+      '99999999-9999-4999-8999-999999999999',
+    );
+    expect(preview.summary).toMatchObject({ eligible: 1, linked: 0, ambiguous: 0 });
+    expect(continuityCreate).not.toHaveBeenCalled();
+
+    const applied = await service.reconcileConversationContinuities(
+      { successorConnectionId: active.whatsAppConnectionId, apply: true },
+      '99999999-9999-4999-8999-999999999999',
+    );
+    expect(applied.summary).toMatchObject({ eligible: 0, linked: 1, ambiguous: 0 });
+    expect(continuityCreate).toHaveBeenCalledWith({
+      data: {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: active.id,
+        createdByUserId: '99999999-9999-4999-8999-999999999999',
+      },
+    });
+  });
+
+  it('refuses ambiguous predecessors without writing a link', async () => {
+    const active = conversation({
+      clientId: client().id,
+      createdAt: new Date('2026-11-11T18:00:00.000Z'),
+    });
+    const continuityCreate = vi.fn();
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConnection: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: active.whatsAppConnectionId,
+            status: 'CONNECTED',
+            connected: true,
+            loggedIn: true,
+          }),
+        },
+        whatsAppConversation: {
+          findMany: vi
+            .fn()
+            .mockResolvedValueOnce([{ id: active.id }])
+            .mockResolvedValueOnce([
+              conversation({ id: predecessorId, clientId: active.clientId }),
+              conversation({ id: oldestId, clientId: active.clientId }),
+            ]),
+          findUnique: vi.fn().mockResolvedValue(active),
+        },
+        whatsAppConversationContinuity: {
+          findUnique: vi.fn().mockResolvedValue(null),
+          create: continuityCreate,
+        },
+      },
+    });
+
+    const result = await service.reconcileConversationContinuities(
+      { successorConnectionId: active.whatsAppConnectionId, apply: true },
+      '99999999-9999-4999-8999-999999999999',
+    );
+
+    expect(result.summary).toMatchObject({ linked: 0, ambiguous: 1 });
+    expect(continuityCreate).not.toHaveBeenCalled();
+  });
+
+  it('hides only linked predecessors from conversation lists', async () => {
+    const { service, prisma } = serviceFactory();
+
+    await service.listConversations({ attendanceStatus: WhatsAppConversationAttendanceFilter.ALL });
+
+    expect(prisma.whatsAppConversation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { successorLink: { is: null } } }),
+    );
   });
 });
 

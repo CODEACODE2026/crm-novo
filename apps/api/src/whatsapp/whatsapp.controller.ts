@@ -56,6 +56,7 @@ import { WhatsAppMessageContextDto } from './dto/whatsapp-message-context.dto';
 import { CreateWhatsAppAttendanceCategoryDto } from './dto/create-whatsapp-attendance-category.dto';
 import { ListWhatsAppAttendancesDto } from './dto/list-whatsapp-attendances.dto';
 import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
+import { ReconcileWhatsAppConversationContinuityDto } from './dto/reconcile-whatsapp-conversation-continuity.dto';
 import { UpdateWhatsAppAttendanceCategoryDto } from './dto/update-whatsapp-attendance-category.dto';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 import { WhatsAppAttendanceAnalyticsService } from './whatsapp-attendance-analytics.service';
@@ -291,6 +292,14 @@ export class WhatsAppController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.whatsAppService.startConversation(dto, request.user.id);
+  }
+
+  @Post('conversation-continuities/reconcile')
+  reconcileConversationContinuities(
+    @Body() dto: ReconcileWhatsAppConversationContinuityDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.reconcileConversationContinuities(dto, request.user.id);
   }
 
   @Get('conversations/:id/messages')

@@ -944,6 +944,8 @@ export interface WhatsAppConversationAvatar {
 
 export interface WhatsAppConversationMessage {
   id: string;
+  conversationId?: string;
+  isHistorical?: boolean;
   direction: WhatsAppConversationMessageDirection;
   type: WhatsAppConversationMessageType;
   text: string | null;

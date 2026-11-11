@@ -351,6 +351,7 @@ model User {
   createdPaymentGroups    PaymentGroup[]                @relation("PaymentGroupCreatedBy")
   receivableAuditEvents   ReceivableAuditEvent[]        @relation("ReceivableAuditEventActor")
   resolvedAttendances     WhatsAppAttendance[]          @relation("WhatsAppAttendanceResolvedBy")
+  createdConversationContinuities WhatsAppConversationContinuity[] @relation("WhatsAppConversationContinuityCreatedBy")
 
   @@map("users")
 }
@@ -785,6 +786,8 @@ model WhatsAppConversation {
   autoReplyExecutions  WhatsAppAutoReplyExecution[]
   labelAssignments     WhatsAppConversationLabelAssignment[]
   attendances          WhatsAppAttendance[]
+  predecessorLink      WhatsAppConversationContinuity?       @relation("WhatsAppConversationSuccessor")
+  successorLink        WhatsAppConversationContinuity?       @relation("WhatsAppConversationPredecessor")
 
   @@unique([whatsAppConnectionId, phoneNormalized])
   @@index([lastMessageAt])
@@ -793,6 +796,20 @@ model WhatsAppConversation {
   @@index([whatsAppConnectionId, status, lastMessageAt])
   @@index([whatsAppConnectionId, needsManualFollowUp, lastMessageAt])
   @@map("whatsapp_conversations")
+}
+
+model WhatsAppConversationContinuity {
+  id                        String               @id @default(uuid()) @db.Uuid
+  predecessorConversationId String               @unique @db.Uuid
+  successorConversationId   String               @unique @db.Uuid
+  createdByUserId           String?              @db.Uuid
+  createdAt                 DateTime             @default(now())
+  predecessor               WhatsAppConversation @relation("WhatsAppConversationPredecessor", fields: [predecessorConversationId], references: [id], onDelete: Restrict)
+  successor                 WhatsAppConversation @relation("WhatsAppConversationSuccessor", fields: [successorConversationId], references: [id], onDelete: Restrict)
+  createdBy                 User?                @relation("WhatsAppConversationContinuityCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@map("whatsapp_conversation_continuities")
 }
 
 model WhatsAppAttendanceCategory {

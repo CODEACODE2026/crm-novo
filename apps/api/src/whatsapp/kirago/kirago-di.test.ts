@@ -54,7 +54,7 @@ describe('Kirago dependency injection', () => {
       name: 'CRM Novo',
       token: 'instance-token',
       webhook: 'https://crm.test/webhook',
-      events: ['Message', 'ReadReceipt', 'ChatPresence'],
+      events: 'Message,ReadReceipt,ChatPresence',
     });
     expect(result).toEqual({ providerUserId: 'kirago-user-id', webhookConfigured: true });
   });

@@ -7,7 +7,7 @@ export type KiragoCreateUserPayload = {
   name: string;
   token: string;
   webhook?: string;
-  events?: readonly string[];
+  events?: string;
 };
 
 export type KiragoUserData = {

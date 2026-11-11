@@ -10,12 +10,12 @@ describe('Kirago clients', () => {
       { request } as never,
     );
 
-    await client.createUser({ name: 'CRM', token: 'instance-token', events: ['Message'] });
+    await client.createUser({ name: 'CRM', token: 'instance-token', events: 'Message' });
 
     expect(request).toHaveBeenCalledWith('/admin/users', {
       method: 'POST',
       headers: { Authorization: 'Bearer admin-token' },
-      body: { name: 'CRM', token: 'instance-token', events: ['Message'] },
+      body: { name: 'CRM', token: 'instance-token', events: 'Message' },
       authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
     });
   });

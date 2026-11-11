@@ -50,7 +50,7 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       name: input.name,
       token: input.instanceToken,
       webhook: input.webhookUrl,
-      events: input.events.length ? input.events : requiredWhatsAppProviderEvents,
+      events: (input.events.length ? input.events : requiredWhatsAppProviderEvents).join(','),
     });
 
     return {

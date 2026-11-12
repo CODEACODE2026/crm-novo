@@ -24,6 +24,16 @@ function createService(
   const records: Array<Record<string, unknown>> = [];
   const decryptedValues = new Map<string, string>();
   const prisma = {
+    paymentProviderWhatsAppPixSettings: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(({ create, update }) =>
+        Promise.resolve({
+          ...create,
+          ...update,
+          updatedAt: new Date('2026-11-12T16:30:00.000Z'),
+        }),
+      ),
+    },
     paymentProviderCredential: {
       findMany: vi.fn().mockResolvedValue(records),
       count: vi.fn(({ where }) =>
@@ -129,6 +139,16 @@ function createService(
 function createPaymentCredentialDeps() {
   const records: Array<Record<string, unknown>> = [];
   const prisma = {
+    paymentProviderWhatsAppPixSettings: {
+      findMany: vi.fn().mockResolvedValue([]),
+      upsert: vi.fn(({ create, update }) =>
+        Promise.resolve({
+          ...create,
+          ...update,
+          updatedAt: new Date('2026-11-12T16:30:00.000Z'),
+        }),
+      ),
+    },
     paymentProviderCredential: {
       findMany: vi.fn().mockResolvedValue(records),
       count: vi.fn(({ where }) =>
@@ -210,6 +230,39 @@ describe('PaymentProviderCredentialsService', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
+  });
+
+  it('stores the WhatsApp PIX merchant name independently per provider', async () => {
+    const fake = createService('fastflow');
+
+    await expect(
+      fake.service.saveWhatsAppPixSettings(
+        'FASTFLOW',
+        { merchantName: '  ATIVO CHEK OUT  ' },
+        '11111111-1111-4111-8111-111111111111',
+      ),
+    ).resolves.toEqual({
+      provider: 'FASTFLOW',
+      environment: 'PRODUCTION',
+      merchantName: 'ATIVO CHEK OUT',
+      updatedAt: '2026-11-12T16:30:00.000Z',
+    });
+
+    expect(fake.prisma.paymentProviderWhatsAppPixSettings.upsert).toHaveBeenCalledWith({
+      where: {
+        provider_environment: { provider: 'FASTFLOW', environment: 'PRODUCTION' },
+      },
+      create: {
+        provider: 'FASTFLOW',
+        environment: 'PRODUCTION',
+        merchantName: 'ATIVO CHEK OUT',
+        updatedByUserId: '11111111-1111-4111-8111-111111111111',
+      },
+      update: {
+        merchantName: 'ATIVO CHEK OUT',
+        updatedByUserId: '11111111-1111-4111-8111-111111111111',
+      },
+    });
   });
 
   it('saves encrypted FastFlow credentials and returns only a token mask', async () => {

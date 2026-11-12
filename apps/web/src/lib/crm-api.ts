@@ -537,6 +537,7 @@ export interface PaymentProviderCredentialStatus {
   environmentProofExpiresAt?: string | null;
   status: 'NAO_CONFIGURADO' | 'CONFIGURADO' | 'VALIDO' | 'ERRO' | 'DESABILITADO';
   providerLabel?: string | null;
+  whatsappPixMerchantName?: string | null;
   partner?: { id?: string; name?: string; email?: string } | null;
 }
 
@@ -3014,6 +3015,19 @@ export function savePaymentProviderCredential(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function savePaymentProviderWhatsAppPixSettings(
+  provider: ConfigurablePaymentProvider,
+  payload: { merchantName: string; environment?: PaymentProviderEnvironment },
+) {
+  return apiFetch<PaymentProviderCredentialStatus>(
+    `/payment-provider-credentials/${provider}/whatsapp-pix-settings`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    },
+  );
 }
 
 export function testPaymentProviderCredential(provider: ConfigurablePaymentProvider) {

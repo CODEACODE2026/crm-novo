@@ -270,6 +270,7 @@ import {
   sendBillingNow,
   sendPaymentIntentWhatsApp,
   savePaymentProviderCredential,
+  savePaymentProviderWhatsAppPixSettings,
   savePaymentWebhookSecret,
   setDefaultPaymentProvider,
   testPaymentProviderCredential,
@@ -6728,6 +6729,12 @@ function SettingsPaymentsPanel({
                 `${paymentProviderLabel(provider)} configurado.`,
               )
             }
+            onSaveWhatsAppPixSettings={(payload) =>
+              runAction(
+                () => savePaymentProviderWhatsAppPixSettings(provider, payload),
+                `Nome PIX no WhatsApp do ${paymentProviderLabel(provider)} configurado.`,
+              )
+            }
             onSetDefault={() =>
               runAction(
                 () => setDefaultPaymentProvider(provider),
@@ -9576,6 +9583,7 @@ function PaymentProviderCard({
   onDeactivate,
   onRegisterWebhook,
   onSave,
+  onSaveWhatsAppPixSettings,
   onSaveWebhookSecret,
   onSetDefault,
   onTest,
@@ -9591,6 +9599,10 @@ function PaymentProviderCard({
     token: string;
     environment?: PaymentProviderEnvironment;
   }) => Promise<boolean>;
+  onSaveWhatsAppPixSettings: (payload: {
+    merchantName: string;
+    environment?: PaymentProviderEnvironment;
+  }) => Promise<boolean>;
   onSaveWebhookSecret: (secret: string) => Promise<boolean>;
   onSetDefault: () => Promise<boolean>;
   onTest: () => Promise<boolean>;
@@ -9601,9 +9613,14 @@ function PaymentProviderCard({
     credential.environment ?? 'TEST',
   );
   const [webhookSecret, setWebhookSecret] = useState('');
+  const [whatsappPixMerchantName, setWhatsAppPixMerchantName] = useState(
+    credential.whatsappPixMerchantName ?? '',
+  );
   const [configOpen, setConfigOpen] = useState(false);
+  const [whatsappPixOpen, setWhatsAppPixOpen] = useState(false);
   const [webhookOpen, setWebhookOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingWhatsAppPix, setSavingWhatsAppPix] = useState(false);
   const [registeringWebhook, setRegisteringWebhook] = useState(false);
   const [testing, setTesting] = useState(false);
   const actionRef = useRef(false);
@@ -9613,7 +9630,8 @@ function PaymentProviderCard({
     setToken('');
     setEnvironment(credential.environment ?? 'TEST');
     setWebhookSecret('');
-  }, [credential.environment, credential.name, provider]);
+    setWhatsAppPixMerchantName(credential.whatsappPixMerchantName ?? '');
+  }, [credential.environment, credential.name, credential.whatsappPixMerchantName, provider]);
 
   const providerName = paymentProviderLabel(provider);
   const configured = credential.configured;
@@ -9623,7 +9641,7 @@ function PaymentProviderCard({
   const canSaveCredential = token.trim().length >= 12;
   const canSubmitConfig = canSaveCredential && (!isMercadoPago || environment === 'TEST');
   const webhookUrl = credential.webhookUrl ?? `/payment-webhooks/${provider.toLowerCase()}`;
-  const actionDisabled = loading || saving || testing || registeringWebhook;
+  const actionDisabled = loading || saving || savingWhatsAppPix || testing || registeringWebhook;
   const mercadoPagoReadiness = isMercadoPago
     ? paymentProviderCredentialReadiness(credential)
     : null;
@@ -9698,6 +9716,22 @@ function PaymentProviderCard({
     setWebhookSecret('');
   }
 
+  async function handleWhatsAppPixSubmit(event: FormEvent) {
+    event.preventDefault();
+    const merchantName = whatsappPixMerchantName.trim();
+    if (merchantName.length < 2 || merchantName.length > 25) return;
+
+    const saved = await guardedAction(
+      () =>
+        onSaveWhatsAppPixSettings({
+          merchantName,
+          ...(isMercadoPago ? { environment: credential.environment ?? environment } : {}),
+        }),
+      setSavingWhatsAppPix,
+    );
+    if (saved) setWhatsAppPixOpen(false);
+  }
+
   return (
     <article className="payment-provider-card">
       <header className="payment-provider-card-header">
@@ -9715,6 +9749,11 @@ function PaymentProviderCard({
                 icon: Pencil,
                 label: configured ? 'Editar configuração' : 'Configurar',
                 onSelect: () => setConfigOpen(true),
+              },
+              {
+                icon: QrCode,
+                label: 'Nome PIX no WhatsApp',
+                onSelect: () => setWhatsAppPixOpen(true),
               },
               {
                 disabled: !configured || actionDisabled,
@@ -9797,6 +9836,10 @@ function PaymentProviderCard({
             <dd>Sim</dd>
           </div>
         ) : null}
+        <div>
+          <dt>Recebedor PIX no WhatsApp</dt>
+          <dd>{credential.whatsappPixMerchantName ?? 'Não configurado'}</dd>
+        </div>
       </dl>
 
       <div className="payment-provider-secret-summary">
@@ -9922,6 +9965,72 @@ function PaymentProviderCard({
                 type="submit"
               >
                 {saving ? 'Salvando...' : 'Salvar configuração'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {whatsappPixOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (event.key === 'Escape' && !savingWhatsAppPix) setWhatsAppPixOpen(false);
+          }}
+        >
+          <form
+            className="modal payment-provider-config-modal"
+            onSubmit={(event) => void handleWhatsAppPixSubmit(event)}
+          >
+            <div className="modal-header">
+              <div>
+                <h2>PIX no WhatsApp — {providerName}</h2>
+                <p>Nome exibido somente no botão PIX enviado pelo WhatsApp.</p>
+              </div>
+              <button
+                aria-label="Fechar"
+                className="icon-button"
+                disabled={savingWhatsAppPix}
+                type="button"
+                onClick={() => setWhatsAppPixOpen(false)}
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+            <div className="payment-provider-config-body">
+              <label className="field">
+                <span>Nome do recebedor PIX no WhatsApp</span>
+                <input
+                  maxLength={25}
+                  value={whatsappPixMerchantName}
+                  onChange={(event) => setWhatsAppPixMerchantName(event.target.value)}
+                />
+                <small>
+                  Esta configuração não altera o titular bancário, a cobrança nem a credencial do
+                  provedor.
+                </small>
+              </label>
+            </div>
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                disabled={savingWhatsAppPix}
+                type="button"
+                onClick={() => setWhatsAppPixOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  savingWhatsAppPix ||
+                  whatsappPixMerchantName.trim().length < 2 ||
+                  whatsappPixMerchantName.trim().length > 25
+                }
+                type="submit"
+              >
+                {savingWhatsAppPix ? 'Salvando...' : 'Salvar nome'}
               </button>
             </div>
           </form>

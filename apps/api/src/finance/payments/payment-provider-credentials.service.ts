@@ -10,6 +10,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { TokenEncryptionService } from '../../whatsapp/security/token-encryption.service';
 import {
   SavePaymentProviderCredentialDto,
+  SavePaymentProviderWhatsAppPixSettingsDto,
   SavePaymentWebhookSecretDto,
 } from '../dto/save-payment-provider-credential.dto';
 import {
@@ -53,26 +54,36 @@ export class PaymentProviderCredentialsService {
   ) {}
 
   async list() {
-    const credentials = await this.prisma.paymentProviderCredential.findMany({
-      where: { provider: { in: [...configurableProviders] } },
-      orderBy: [{ provider: 'asc' }, { active: 'desc' }, { createdAt: 'desc' }],
-    });
+    const [credentials, whatsappPixSettings] = await Promise.all([
+      this.prisma.paymentProviderCredential.findMany({
+        where: { provider: { in: [...configurableProviders] } },
+        orderBy: [{ provider: 'asc' }, { active: 'desc' }, { createdAt: 'desc' }],
+      }),
+      this.prisma.paymentProviderWhatsAppPixSettings.findMany({
+        where: { provider: { in: [...configurableProviders] } },
+      }),
+    ]);
 
     return configurableProviders.map((provider) => {
+      const environment =
+        provider === 'MERCADO_PAGO'
+          ? this.currentMercadoPagoEnvironment()
+          : PaymentProviderEnvironment.PRODUCTION;
       const credential = credentials.find(
         (item) =>
           item.provider === provider &&
           item.active &&
-          (provider !== 'MERCADO_PAGO' ||
-            item.environment === this.currentMercadoPagoEnvironment()),
+          (provider !== 'MERCADO_PAGO' || item.environment === environment),
+      );
+      const whatsappPixSetting = whatsappPixSettings.find(
+        (item) => item.provider === provider && item.environment === environment,
       );
       return credential
-        ? this.present(credential)
+        ? this.present(credential, whatsappPixSetting?.merchantName ?? null)
         : {
             provider,
-            ...(provider === 'MERCADO_PAGO'
-              ? { environment: this.currentMercadoPagoEnvironment() }
-              : {}),
+            ...(provider === 'MERCADO_PAGO' ? { environment } : {}),
+            whatsappPixMerchantName: whatsappPixSetting?.merchantName ?? null,
             configured: false,
             status:
               provider === 'MERCADO_PAGO' && !this.mercadoPagoEnabled()
@@ -80,6 +91,32 @@ export class PaymentProviderCredentialsService {
                 : 'NAO_CONFIGURADO',
           };
     });
+  }
+
+  async saveWhatsAppPixSettings(
+    provider: PaymentProviderCode,
+    dto: SavePaymentProviderWhatsAppPixSettingsDto,
+    actorUserId: string,
+  ) {
+    this.ensureConfigurableProvider(provider);
+    const environment = this.resolveCredentialEnvironment(provider, dto.environment);
+    const merchantName = dto.merchantName.trim();
+    if (merchantName.length < 2 || merchantName.length > 25) {
+      throw new BadRequestException('Nome do recebedor PIX no WhatsApp invalido.');
+    }
+
+    const settings = await this.prisma.paymentProviderWhatsAppPixSettings.upsert({
+      where: { provider_environment: { provider, environment } },
+      create: { provider, environment, merchantName, updatedByUserId: actorUserId },
+      update: { merchantName, updatedByUserId: actorUserId },
+    });
+
+    return {
+      provider: settings.provider,
+      environment: settings.environment,
+      merchantName: settings.merchantName,
+      updatedAt: settings.updatedAt.toISOString(),
+    };
   }
 
   async save(dto: SavePaymentProviderCredentialDto) {
@@ -580,7 +617,10 @@ export class PaymentProviderCredentialsService {
     }
   }
 
-  private present(credential: PaymentProviderCredential) {
+  private present(
+    credential: PaymentProviderCredential,
+    whatsappPixMerchantName: string | null = null,
+  ) {
     const status = credential.active
       ? credential.lastValidationStatus === 'VALIDO' ||
         (credential.environmentProofStatus === 'VERIFIED_TEST' &&
@@ -595,6 +635,7 @@ export class PaymentProviderCredentialsService {
       provider: credential.provider,
       environment: credential.environment,
       name: credential.name,
+      whatsappPixMerchantName,
       configured: credential.active,
       active: credential.active,
       tokenMask:

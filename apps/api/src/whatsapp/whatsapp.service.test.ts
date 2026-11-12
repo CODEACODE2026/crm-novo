@@ -609,6 +609,9 @@ function serviceFactory({
         createdAt: now,
       }),
     },
+    paymentProviderWhatsAppPixSettings: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
     billingResponse: {
       create: vi.fn(),
       update: vi.fn(),
@@ -805,6 +808,7 @@ function serviceFactory({
     sendVideo: vi.fn().mockResolvedValue({ providerMessageId: 'provider-video-id' }),
     sendSticker: vi.fn().mockResolvedValue({ providerMessageId: 'provider-sticker-id' }),
     sendButtons: vi.fn().mockResolvedValue({ providerMessageId: 'provider-button-id' }),
+    sendPixPayment: vi.fn().mockResolvedValue({ providerMessageId: 'provider-pix-id' }),
     sendReaction: vi.fn().mockResolvedValue(undefined),
     editMessage: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
@@ -4022,6 +4026,46 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify((prisma.$transaction as MockWithCalls).mock.calls)).not.toContain(
       'PIX-COPY-PASTE-CURRENT',
     );
+  });
+
+  it('uses PixPayment only behind both gates and preserves the exact charge data', async () => {
+    const settings = {
+      provider: 'FASTFLOW',
+      environment: 'PRODUCTION',
+      merchantName: 'ATIVO CHEK OUT',
+    };
+    const { service, provider } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      configOverrides: {
+        WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED: 'true',
+        WHATSAPP_PIX_PAYMENT_NATIVE_PROVIDERS: 'FASTFLOW',
+      },
+      prismaOverrides: {
+        paymentProviderWhatsAppPixSettings: {
+          findUnique: vi.fn().mockResolvedValue(settings),
+        },
+      },
+    });
+
+    await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(provider.sendPixPayment).toHaveBeenCalledWith('instance-token', {
+      phone: '5544999999999',
+      title: 'PIX',
+      body: expect.stringContaining('Valor: R$'),
+      pixPayment: {
+        merchantName: 'ATIVO CHEK OUT',
+        key: 'PIX-COPY-PASTE-CURRENT',
+        keyType: 'EVP',
+        displayText: 'Copiar Chave PIX',
+        amount: 3000,
+        offset: 100,
+        currency: 'BRL',
+        referenceId: 'payment-intent-id',
+        itemName: 'Cobranca inicial de ativacao - Mensal',
+      },
+    });
+    expect(provider.sendButtons).not.toHaveBeenCalled();
   });
 
   it('reuses an existing PIX conversation when only the Brazil 9th digit variant differs', async () => {

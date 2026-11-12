@@ -26,3 +26,14 @@ export class SavePaymentWebhookSecretDto {
   @MaxLength(512)
   secret!: string;
 }
+
+export class SavePaymentProviderWhatsAppPixSettingsDto {
+  @IsOptional()
+  @IsEnum(PaymentProviderEnvironment)
+  environment?: PaymentProviderEnvironment;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(25)
+  merchantName!: string;
+}

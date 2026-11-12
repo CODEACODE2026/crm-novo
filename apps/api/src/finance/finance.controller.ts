@@ -43,6 +43,7 @@ import {
 } from './dto/replace-receivable-pix.dto';
 import {
   SavePaymentProviderCredentialDto,
+  SavePaymentProviderWhatsAppPixSettingsDto,
   SavePaymentWebhookSecretDto,
 } from './dto/save-payment-provider-credential.dto';
 import { UpdateFinancialCategoryDto } from './dto/update-financial-category.dto';
@@ -298,6 +299,15 @@ export class FinanceController {
   @Post('payment-provider-credentials/:provider/default')
   setDefaultPaymentProvider(@Param('provider') provider: PaymentProviderCode) {
     return this.paymentCredentials.setDefaultProvider(provider);
+  }
+
+  @Patch('payment-provider-credentials/:provider/whatsapp-pix-settings')
+  savePaymentProviderWhatsAppPixSettings(
+    @Param('provider') provider: PaymentProviderCode,
+    @Body() dto: SavePaymentProviderWhatsAppPixSettingsDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentCredentials.saveWhatsAppPixSettings(provider, dto, request.user.id);
   }
 
   @Post('payment-provider-credentials/:provider/webhook-secret')

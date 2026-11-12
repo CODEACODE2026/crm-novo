@@ -17,6 +17,7 @@ import type {
   ResolveUserLidResult,
   RemoteConnectionLookupInput,
   SendButtonsInput,
+  SendPixPaymentInput,
   SendDocumentInput,
   SendImageInput,
   SendAudioInput,
@@ -298,6 +299,40 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
     return {
       providerMessageId: response.data?.Id ?? null,
     };
+  }
+
+  async sendPixPayment(instanceToken: string, input: SendPixPaymentInput) {
+    const pixPayment = input.pixPayment;
+    const response = await this.instanceClient.sendPixPayment(instanceToken, {
+      Phone: input.phone,
+      Title: input.title,
+      Body: input.body,
+      Buttons: [
+        {
+          PixPayment: {
+            MerchantName: pixPayment.merchantName,
+            Key: pixPayment.key,
+            KeyType: pixPayment.keyType,
+            DisplayText: pixPayment.displayText,
+            Amount: pixPayment.amount,
+            Offset: pixPayment.offset,
+            Currency: pixPayment.currency,
+            ReferenceId: pixPayment.referenceId,
+            ItemName: pixPayment.itemName,
+          },
+        },
+      ],
+    });
+
+    if (response.success !== true || response.code !== 200) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao enviar pagamento PIX na Kirago.',
+        response.code,
+      );
+    }
+
+    return { providerMessageId: response.data?.Id ?? null };
   }
 
   async downloadMedia(instanceToken: string, input: DownloadMediaInput) {

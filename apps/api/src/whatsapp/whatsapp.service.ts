@@ -48,6 +48,7 @@ import {
   normalizeBrazilPhone,
 } from '../clients/utils/phone-normalizer';
 import { KiragoProviderError } from './kirago/kirago-provider.error';
+import { buildKiragoPixPayment } from './kirago/kirago-pix-payment';
 import {
   KiragoWebhookNormalizer,
   type NormalizedKiragoWebhook,
@@ -1077,6 +1078,11 @@ export class WhatsAppService {
       const latestContext = await this.buildPixWhatsAppContext(latestIntent);
       await this.assertExistingInternationalPixConversation(latestConnection, latestContext);
       const latestTemplate = this.buildPixDeliveryTemplate(latestContext, latestIntent);
+      const nativePixPayment = await this.buildNativePixPaymentInput(
+        latestIntent,
+        latestContext,
+        latestTemplate,
+      );
 
       if (
         latestContext.phone !== dispatch.phone ||
@@ -1100,12 +1106,14 @@ export class WhatsAppService {
               body: latestTemplate.body,
               requestId,
             })
-          : this.provider.sendButtons(instanceToken, {
-              phone: latestContext.phone,
-              title: latestTemplate.title,
-              body: latestTemplate.body,
-              buttons: [latestTemplate.button],
-            }),
+          : nativePixPayment
+            ? this.provider.sendPixPayment(instanceToken, nativePixPayment)
+            : this.provider.sendButtons(instanceToken, {
+                phone: latestContext.phone,
+                title: latestTemplate.title,
+                body: latestTemplate.body,
+                buttons: [latestTemplate.button],
+              }),
       );
       if (!result.providerMessageId) {
         throw new BadGatewayException(
@@ -1146,6 +1154,7 @@ export class WhatsAppService {
                 phoneMasked: this.maskPhone(latestContext.phone),
                 amount: latestIntent.amount.toString(),
                 channel: 'WHATSAPP',
+                buttonFormat: nativePixPayment ? 'PIX_PAYMENT_EVP_EVALUATION' : 'CTA_COPY',
                 ...latestContext.metadata,
               },
               createdByUserId: actorUserId,
@@ -8805,6 +8814,67 @@ export class WhatsAppService {
     }
 
     return new Set(countries).has(country);
+  }
+
+  private async buildNativePixPaymentInput(
+    intent: PixPaymentIntentForWhatsApp,
+    context: PixWhatsAppContext,
+    template: PixWhatsAppTemplateSnapshot,
+  ) {
+    if (
+      context.deliveryMode !== 'BUTTONS' ||
+      !this.nativePixPaymentEnabledForProvider(intent.provider)
+    ) {
+      return null;
+    }
+
+    const environment = intent.providerEnvironment ?? 'PRODUCTION';
+    const settings = await this.prisma.paymentProviderWhatsAppPixSettings.findUnique({
+      where: {
+        provider_environment: {
+          provider: intent.provider,
+          environment,
+        },
+      },
+    });
+
+    if (!settings?.merchantName?.trim()) {
+      throw new ConflictException(
+        'Nome do recebedor PIX no WhatsApp nao configurado para este provedor.',
+      );
+    }
+
+    return buildKiragoPixPayment({
+      phone: context.phone,
+      body: template.body,
+      merchantName: settings.merchantName,
+      pixCopyPaste: intent.pixCopyPaste!,
+      amount: intent.amount,
+      referenceId: intent.id,
+      itemName: this.pixWhatsAppItemName(context),
+    });
+  }
+
+  private nativePixPaymentEnabledForProvider(provider: string) {
+    if (this.config.get<string>('WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED') !== 'true') return false;
+
+    const configured = this.config.get<string>('WHATSAPP_PIX_PAYMENT_NATIVE_PROVIDERS') ?? '';
+    const providers = configured
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+
+    return providers.length > 0 && providers.every((value) => /^[A-Z_]+$/.test(value))
+      ? new Set(providers).has(provider)
+      : false;
+  }
+
+  private pixWhatsAppItemName(context: PixWhatsAppContext) {
+    if (context.kind === 'GROUPED') {
+      return `Pagamento de ${context.paymentGroup.items.length} cobrancas`;
+    }
+
+    return context.receivable.description.trim() || 'Pagamento CRM NOVO';
   }
 
   private async assertExistingInternationalPixConversation(

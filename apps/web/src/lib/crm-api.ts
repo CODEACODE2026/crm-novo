@@ -989,6 +989,11 @@ export interface WhatsAppConversationMessage {
     paymentIntentId: string;
     amount: string | null;
     buttonLabel: string;
+    format?: 'PIX_PAYMENT' | 'CTA_COPY' | null;
+    merchantName?: string | null;
+    itemName?: string | null;
+    displayText?: string | null;
+    referenceId?: string | null;
   } | null;
   createdAt: string;
 }

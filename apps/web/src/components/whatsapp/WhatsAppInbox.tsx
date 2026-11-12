@@ -457,6 +457,18 @@ export function isConversationPixCopyEligible(message: WhatsAppConversationMessa
   return Boolean(message.pixContext?.paymentIntentId);
 }
 
+export function isConversationPixPaymentPresentation(message: WhatsAppConversationMessage) {
+  return message.pixContext?.format === 'PIX_PAYMENT';
+}
+
+export function conversationPixPaymentAmount(message: WhatsAppConversationMessage) {
+  const amount = message.pixContext?.amount?.trim();
+  if (!amount) return null;
+
+  const numericAmount = Number(amount);
+  return Number.isFinite(numericAmount) && numericAmount >= 0 ? formatCurrency(amount) : null;
+}
+
 export function savedStickerPreviewKind(mimeType: string): SavedStickerPreviewKind {
   const normalized = savedStickerPreviewMimeType(mimeType);
 
@@ -6881,7 +6893,19 @@ function ConversationBubble({
         ) : null}
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         {!message.deleted ? (
-          <ConversationPixCopyAction message={message} state={pixCopyState} onCopyPix={onCopyPix} />
+          isConversationPixPaymentPresentation(message) ? (
+            <ConversationPixPaymentCard
+              message={message}
+              state={pixCopyState}
+              onCopyPix={onCopyPix}
+            />
+          ) : (
+            <ConversationPixCopyAction
+              message={message}
+              state={pixCopyState}
+              onCopyPix={onCopyPix}
+            />
+          )
         ) : null}
         {!message.deleted ? <ConversationReactionSummary reactions={message.reactions} /> : null}
         {reactionError ? (
@@ -7349,9 +7373,15 @@ export function ConversationPixCopyAction({
   const loading = state?.status === 'loading';
   const feedback =
     state && state.status !== 'idle' && state.status !== 'loading'
-      ? conversationPixCopyButtonLabel(message.pixContext?.buttonLabel, state)
+      ? conversationPixCopyButtonLabel(
+          message.pixContext?.displayText ?? message.pixContext?.buttonLabel,
+          state,
+        )
       : '';
-  const label = conversationPixCopyButtonLabel(message.pixContext?.buttonLabel, state);
+  const label = conversationPixCopyButtonLabel(
+    message.pixContext?.displayText ?? message.pixContext?.buttonLabel,
+    state,
+  );
 
   return (
     <div className="conversation-pix-copy">
@@ -7374,6 +7404,64 @@ export function ConversationPixCopyAction({
         </span>
       ) : null}
     </div>
+  );
+}
+
+export function ConversationPixPaymentCard({
+  message,
+  state,
+  onCopyPix,
+}: {
+  message: WhatsAppConversationMessage;
+  state?: ConversationPixCopyState | undefined;
+  onCopyPix: (message: WhatsAppConversationMessage) => void;
+}) {
+  if (!isConversationPixPaymentPresentation(message)) {
+    return null;
+  }
+
+  const context = message.pixContext;
+  const merchantName = context?.merchantName?.trim();
+  const itemName = context?.itemName?.trim();
+  const referenceId = context?.referenceId?.trim();
+  const amount = conversationPixPaymentAmount(message);
+
+  return (
+    <section className="conversation-pix-payment" aria-label="Pagamento PIX">
+      <header className="conversation-pix-payment-header">
+        <span className="conversation-pix-payment-mark" aria-hidden="true">
+          <QrCode size={18} />
+        </span>
+        <span>
+          <small>Pagamento</small>
+          <strong>PIX</strong>
+        </span>
+        {amount ? <strong className="conversation-pix-payment-amount">{amount}</strong> : null}
+      </header>
+      {merchantName || itemName || referenceId ? (
+        <dl className="conversation-pix-payment-details">
+          {merchantName ? (
+            <div>
+              <dt>Recebedor</dt>
+              <dd>{merchantName}</dd>
+            </div>
+          ) : null}
+          {itemName ? (
+            <div>
+              <dt>Descrição</dt>
+              <dd>{itemName}</dd>
+            </div>
+          ) : null}
+          {referenceId ? (
+            <div>
+              <dt>Referência</dt>
+              <dd>{referenceId}</dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+      <ConversationPixCopyAction message={message} state={state} onCopyPix={onCopyPix} />
+    </section>
   );
 }
 

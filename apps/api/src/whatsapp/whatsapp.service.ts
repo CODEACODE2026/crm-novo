@@ -9639,11 +9639,51 @@ export class WhatsAppService {
         ? button.displayText.trim()
         : 'Copiar Chave PIX';
 
+    const presentation = this.asRecord(metadata.pixPresentation);
+    const safePresentation =
+      presentation?.format === 'PIX_PAYMENT'
+        ? this.presentNativePixPresentation(presentation)
+        : presentation?.format === 'CTA_COPY'
+          ? { format: 'CTA_COPY' as const }
+          : null;
+
     return {
       paymentIntentId,
       amount,
       buttonLabel,
+      ...(safePresentation ?? {}),
     };
+  }
+
+  private presentNativePixPresentation(presentation: Record<string, unknown>) {
+    const merchantName = this.presentPixMetadataString(presentation, 'merchantName', 25);
+    const itemName = this.presentPixMetadataString(presentation, 'itemName', 64);
+    const referenceId = this.presentPixMetadataString(presentation, 'referenceId', 128);
+    const displayText = this.presentPixMetadataString(presentation, 'displayText', 64);
+
+    if (!merchantName || !itemName || !referenceId || !displayText) {
+      return null;
+    }
+
+    return {
+      format: 'PIX_PAYMENT' as const,
+      merchantName,
+      itemName,
+      referenceId,
+      displayText,
+    };
+  }
+
+  private presentPixMetadataString(
+    metadata: Record<string, unknown>,
+    key: string,
+    maxLength: number,
+  ) {
+    const value = metadata[key];
+    if (typeof value !== 'string') return null;
+
+    const normalized = value.trim();
+    return normalized && normalized.length <= maxLength ? normalized : null;
   }
 
   private presentMessageReactions(reactions: WhatsAppMessageReaction[]) {

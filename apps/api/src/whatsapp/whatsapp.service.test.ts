@@ -3999,8 +3999,18 @@ describe('WhatsAppService', () => {
       }),
     );
     const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
-      data?: { rawMetadata?: unknown; text?: string };
+      data?: {
+        rawMetadata?: { pixPresentation?: Record<string, unknown> };
+        text?: string;
+      };
     };
+    expect(messageCreate?.data?.rawMetadata?.pixPresentation).toEqual({
+      format: 'CTA_COPY',
+      amount: '30',
+      displayText: 'Copiar Chave PIX',
+      referenceId: 'payment-intent-id',
+      itemName: 'Cobranca inicial de ativacao - Mensal',
+    });
     expect(JSON.stringify(messageCreate?.data?.rawMetadata)).not.toContain(
       'PIX-COPY-PASTE-CURRENT',
     );
@@ -4034,7 +4044,7 @@ describe('WhatsAppService', () => {
       environment: 'PRODUCTION',
       merchantName: 'ATIVO CHEK OUT',
     };
-    const { service, provider } = serviceFactory({
+    const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
       configOverrides: {
         WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED: 'true',
@@ -4066,6 +4076,22 @@ describe('WhatsAppService', () => {
       },
     });
     expect(provider.sendButtons).not.toHaveBeenCalled();
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { rawMetadata?: { pixPresentation?: Record<string, unknown> } };
+    };
+    expect(messageCreate?.data?.rawMetadata?.pixPresentation).toEqual({
+      format: 'PIX_PAYMENT',
+      merchantName: 'ATIVO CHEK OUT',
+      amount: '30',
+      displayText: 'Copiar Chave PIX',
+      referenceId: 'payment-intent-id',
+      itemName: 'Cobranca inicial de ativacao - Mensal',
+    });
+    const serializedMetadata = JSON.stringify(messageCreate?.data?.rawMetadata);
+    expect(serializedMetadata).not.toContain('PIX-COPY-PASTE-CURRENT');
+    expect(serializedMetadata).not.toContain('instance-token');
+    expect(serializedMetadata).not.toContain('keyType');
+    expect(serializedMetadata).not.toContain('EVP');
   });
 
   it('reuses an existing PIX conversation when only the Brazil 9th digit variant differs', async () => {
@@ -4431,6 +4457,10 @@ describe('WhatsAppService', () => {
     });
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      configOverrides: {
+        WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED: 'true',
+        WHATSAPP_PIX_PAYMENT_NATIVE_PROVIDERS: 'FASTFLOW',
+      },
       prismaOverrides: {
         messageDispatch: {
           create: vi.fn().mockRejectedValue(duplicateError),
@@ -4455,8 +4485,11 @@ describe('WhatsAppService', () => {
 
     expect(result).toMatchObject({ status: 'SENT', reused: true, idempotent: true });
     expect(provider.sendButtons).not.toHaveBeenCalled();
+    expect(provider.sendPixPayment).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(existingMessage.rawMetadata).not.toHaveProperty('pixPresentation');
   });
 
   it('sends MANUAL_CHARGE for a registered client using payer snapshots instead of edited client data', async () => {

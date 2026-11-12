@@ -341,6 +341,23 @@ type PixWhatsAppTemplateSnapshot = {
   };
 };
 
+type PixWhatsAppPresentationSnapshot =
+  | {
+      format: 'CTA_COPY';
+      amount: string;
+      displayText: string;
+      referenceId: string;
+      itemName: string;
+    }
+  | {
+      format: 'PIX_PAYMENT';
+      merchantName: string;
+      amount: string;
+      displayText: string;
+      referenceId: string;
+      itemName: string;
+    };
+
 type PixWhatsAppDeliveryMode = 'TEXT' | 'BUTTONS';
 
 type PixWhatsAppContext =
@@ -1083,6 +1100,26 @@ export class WhatsAppService {
         latestContext,
         latestTemplate,
       );
+      const pixPresentation: PixWhatsAppPresentationSnapshot | undefined =
+        latestContext.deliveryMode !== 'BUTTONS'
+          ? undefined
+          : nativePixPayment
+            ? {
+                format: 'PIX_PAYMENT',
+                merchantName: nativePixPayment.pixPayment.merchantName,
+                amount: latestIntent.amount.toString(),
+                displayText: nativePixPayment.pixPayment.displayText,
+                referenceId: nativePixPayment.pixPayment.referenceId,
+                itemName: nativePixPayment.pixPayment.itemName,
+              }
+            : {
+                format: 'CTA_COPY',
+                amount: latestIntent.amount.toString(),
+                displayText:
+                  latestTemplate.button.buttonParamsJson.display_text ?? 'Copiar Chave PIX',
+                referenceId: latestIntent.id,
+                itemName: this.pixWhatsAppItemName(latestContext),
+              };
 
       if (
         latestContext.phone !== dispatch.phone ||
@@ -1178,6 +1215,7 @@ export class WhatsAppService {
           dispatch: sent,
           intent: latestIntent,
           template: latestTemplate,
+          ...(pixPresentation ? { pixPresentation } : {}),
         });
 
         return { dispatch: sent, message };
@@ -8361,6 +8399,7 @@ export class WhatsAppService {
       };
       intent: PixPaymentIntentForWhatsApp;
       template: PixWhatsAppTemplateSnapshot;
+      pixPresentation?: PixWhatsAppPresentationSnapshot;
     },
   ): Promise<PixWhatsAppConversationMessageResult | null> {
     if (input.dispatch.status !== 'SENT') {
@@ -8618,6 +8657,7 @@ export class WhatsAppService {
       dispatch: MessageDispatch;
       intent: PixPaymentIntentForWhatsApp;
       template: PixWhatsAppTemplateSnapshot;
+      pixPresentation?: PixWhatsAppPresentationSnapshot;
     },
   ): Pick<Prisma.WhatsAppMessageUncheckedUpdateInput, 'rawMetadata'> {
     const currentMetadata = this.rawMetadataObject(current);
@@ -8635,6 +8675,7 @@ export class WhatsAppService {
     dispatch: MessageDispatch;
     intent: PixPaymentIntentForWhatsApp;
     template: PixWhatsAppTemplateSnapshot;
+    pixPresentation?: PixWhatsAppPresentationSnapshot;
   }) {
     return {
       source: 'pix_whatsapp_send',
@@ -8654,6 +8695,7 @@ export class WhatsAppService {
           displayText: input.template.button.buttonParamsJson.display_text ?? null,
         },
       },
+      ...(input.pixPresentation ? { pixPresentation: input.pixPresentation } : {}),
       ...input.context.metadata,
     } as Prisma.InputJsonObject;
   }

@@ -1581,6 +1581,120 @@ describe('WhatsAppService', () => {
     });
   });
 
+  it('diagnoses active and predecessor business identities without writing or exposing phones', async () => {
+    const active = {
+      ...connection({ phone: null, status: 'CONNECTED', connected: true, loggedIn: true }),
+      _count: { conversations: 24 },
+    };
+    const predecessor = {
+      ...connection({
+        id: '22222222-2222-4222-8222-222222222222',
+        phone: '+5544888888888',
+        status: 'DISCONNECTED',
+        connected: false,
+        loggedIn: false,
+      }),
+      _count: { conversations: 24 },
+    };
+    const connectionRepo = {
+      findFirst: vi.fn().mockResolvedValue(active),
+      findMany: vi.fn().mockResolvedValue([active, predecessor]),
+      findUnique: vi.fn().mockResolvedValue(active),
+      create: vi.fn(),
+      update: vi.fn(),
+    };
+    const { service, provider } = serviceFactory({
+      prismaOverrides: { whatsAppConnection: connectionRepo },
+      providerOverrides: {
+        getStatus: vi
+          .fn()
+          .mockResolvedValueOnce({ connected: true, loggedIn: true, phone: '5544999999999' })
+          .mockResolvedValueOnce({ connected: false, loggedIn: false, phone: null }),
+      },
+    });
+
+    const result = await service.diagnoseBusinessIdentities();
+
+    expect(result.summary).toEqual({ ACTIVE_VALID: 1, PREDECESSOR_CANDIDATE_MISSING: 1 });
+    expect(result.connections).toEqual([
+      {
+        connectionId: active.id,
+        scope: 'ACTIVE',
+        operational: true,
+        conversationCount: 24,
+        storedIdentity: 'MISSING',
+        providerIdentity: 'VALID',
+        identitiesMatch: false,
+        source: 'KIRAGO_SESSION_STATUS',
+      },
+      {
+        connectionId: predecessor.id,
+        scope: 'PREDECESSOR_CANDIDATE',
+        operational: false,
+        conversationCount: 24,
+        storedIdentity: 'VALID',
+        providerIdentity: 'MISSING',
+        identitiesMatch: null,
+        source: 'KIRAGO_SESSION_STATUS',
+      },
+    ]);
+    expect(connectionRepo.update).not.toHaveBeenCalled();
+    expect(JSON.stringify(result)).not.toContain('5544999999999');
+    expect(provider.getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes only the requested connection from authenticated Kirago status', async () => {
+    const target = connection({ phone: 'invalid-local-identity' });
+    const updated = connection({ phone: '+5544999999999' });
+    const connectionRepo = {
+      findFirst: vi.fn().mockResolvedValue(target),
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(target),
+      create: vi.fn(),
+      update: vi.fn().mockResolvedValue(updated),
+    };
+    const { service } = serviceFactory({
+      prismaOverrides: { whatsAppConnection: connectionRepo },
+      providerOverrides: {
+        getStatus: vi.fn().mockResolvedValue({
+          connected: true,
+          loggedIn: true,
+          phone: '5544999999999',
+        }),
+      },
+    });
+
+    await expect(service.refreshBusinessIdentity(target.id)).resolves.toEqual(
+      expect.objectContaining({ id: target.id, phone: '+5544999999999' }),
+    );
+    expect(connectionRepo.update).toHaveBeenCalledWith({
+      where: { id: target.id },
+      data: { phone: '+5544999999999' },
+    });
+  });
+
+  it('fails closed when Kirago cannot attest a business identity', async () => {
+    const target = connection({ phone: null });
+    const connectionRepo = {
+      findFirst: vi.fn().mockResolvedValue(target),
+      findMany: vi.fn().mockResolvedValue([]),
+      findUnique: vi.fn().mockResolvedValue(target),
+      create: vi.fn(),
+      update: vi.fn(),
+    };
+    const { service } = serviceFactory({
+      prismaOverrides: { whatsAppConnection: connectionRepo },
+      providerOverrides: {
+        getStatus: vi.fn().mockResolvedValue({ connected: true, loggedIn: true, phone: null }),
+      },
+    });
+
+    await expect(service.refreshBusinessIdentity(target.id)).rejects.toThrow(
+      'A Kirago nao retornou identidade empresarial valida para esta conexao.',
+    );
+    expect(connectionRepo.update).not.toHaveBeenCalled();
+  });
+
   it('persists CONNECTED status and phone when refreshing a divergent local connection', async () => {
     const { service, prisma } = serviceFactory({
       currentConnection: connection({ status: 'DISCONNECTED', connected: false, loggedIn: false }),
@@ -1605,10 +1719,46 @@ describe('WhatsAppService', () => {
       status: 'CONNECTED',
       connected: true,
       loggedIn: true,
-      phone: '5544999999999',
+      phone: '+5544999999999',
     });
     expect(updateCall.data?.connectedAt).toBeInstanceOf(Date);
     expect(updateCall.data?.lastStatusAt).toBeInstanceOf(Date);
+  });
+
+  it('rejects an invalid provider business identity without overwriting a trusted phone', async () => {
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ phone: '+5544999999999' }),
+      providerOverrides: {
+        getStatus: vi.fn().mockResolvedValue({
+          connected: true,
+          loggedIn: true,
+          phone: 'invalid-provider-identity',
+        }),
+      },
+    });
+
+    await service.refreshStatus();
+
+    const updateCall = (prisma.whatsAppConnection.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(updateCall.data?.phone).toBe('+5544999999999');
+  });
+
+  it('does not infer a missing provider business identity', async () => {
+    const { service, prisma } = serviceFactory({
+      currentConnection: connection({ phone: null }),
+      providerOverrides: {
+        getStatus: vi.fn().mockResolvedValue({ connected: true, loggedIn: true, phone: null }),
+      },
+    });
+
+    await service.refreshStatus();
+
+    const updateCall = (prisma.whatsAppConnection.update as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: Record<string, unknown>;
+    };
+    expect(updateCall.data?.phone).toBeNull();
   });
 
   it('blocks manual send when the connection is disconnected', async () => {

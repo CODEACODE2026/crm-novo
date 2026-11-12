@@ -112,6 +112,16 @@ export class WhatsAppController {
     return this.whatsAppService.listUsableConnections();
   }
 
+  @Get('connections/business-identities/diagnostic')
+  diagnoseBusinessIdentities() {
+    return this.whatsAppService.diagnoseBusinessIdentities();
+  }
+
+  @Post('connections/:connectionId/business-identity/refresh')
+  refreshBusinessIdentity(@Param('connectionId', new ParseUUIDPipe()) connectionId: string) {
+    return this.whatsAppService.refreshBusinessIdentity(connectionId);
+  }
+
   @Get('auto-replies')
   listAutoReplies() {
     return this.autoReplyService.listConfigs();

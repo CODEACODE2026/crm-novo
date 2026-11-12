@@ -287,6 +287,14 @@ export class KiragoWhatsAppProvider implements WhatsAppProvider {
       buttons: input.buttons,
     });
 
+    if (response.success !== true || response.code !== 200) {
+      throw new KiragoProviderError(
+        'WHATSAPP_PROVIDER_ERROR',
+        'Falha ao enviar botoes na Kirago.',
+        response.code,
+      );
+    }
+
     return {
       providerMessageId: response.data?.Id ?? null,
     };

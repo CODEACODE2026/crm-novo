@@ -601,6 +601,116 @@ export class WhatsAppService {
     return connections.map((connection) => this.presentConnection(connection));
   }
 
+  async diagnoseBusinessIdentities() {
+    const connections = await this.prisma.whatsAppConnection.findMany({
+      where: {
+        provider: 'KIRAGO',
+        OR: [
+          { status: 'CONNECTED', connected: true, loggedIn: true },
+          { conversations: { some: {} } },
+        ],
+      },
+      include: { _count: { select: { conversations: true } } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    });
+    const items: Array<{
+      connectionId: string;
+      scope: 'ACTIVE' | 'PREDECESSOR_CANDIDATE';
+      operational: boolean;
+      conversationCount: number;
+      storedIdentity: 'VALID' | 'MISSING' | 'INVALID';
+      providerIdentity: 'VALID' | 'MISSING' | 'INVALID' | 'UNAVAILABLE';
+      identitiesMatch: boolean | null;
+      source: 'KIRAGO_SESSION_STATUS';
+    }> = [];
+
+    for (const connection of connections) {
+      const storedIdentity = this.classifyBusinessWhatsAppIdentity(connection.phone);
+      let providerIdentity: 'VALID' | 'MISSING' | 'INVALID' | 'UNAVAILABLE' = 'UNAVAILABLE';
+      let identitiesMatch: boolean | null = null;
+
+      try {
+        const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+        const providerStatus = await this.provider.getStatus(instanceToken);
+        providerIdentity = this.classifyBusinessWhatsAppIdentity(providerStatus.phone);
+        const providerCanonical = this.normalizeBusinessWhatsAppIdentity(providerStatus.phone);
+        const storedCanonical = this.normalizeBusinessWhatsAppIdentity(connection.phone);
+        identitiesMatch = providerCanonical ? providerCanonical === storedCanonical : null;
+      } catch (error) {
+        this.logger.warn(
+          `WhatsApp business identity diagnostic connection=${connection.id} ` +
+            `source=KIRAGO_SESSION_STATUS outcome=UNAVAILABLE error=${this.sanitizeError(error)}`,
+        );
+      }
+
+      items.push({
+        connectionId: connection.id,
+        scope:
+          connection.status === 'CONNECTED' && connection.connected && connection.loggedIn
+            ? 'ACTIVE'
+            : 'PREDECESSOR_CANDIDATE',
+        operational:
+          connection.status === 'CONNECTED' && connection.connected && connection.loggedIn,
+        conversationCount: connection._count.conversations,
+        storedIdentity,
+        providerIdentity,
+        identitiesMatch,
+        source: 'KIRAGO_SESSION_STATUS',
+      });
+    }
+
+    const summary = items.reduce<Record<string, number>>((counts, item) => {
+      const key = `${item.scope}_${item.providerIdentity}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+      return counts;
+    }, {});
+
+    return { summary, connections: items };
+  }
+
+  async refreshBusinessIdentity(connectionId: string) {
+    const connection = await this.prisma.whatsAppConnection.findUnique({
+      where: { id: connectionId },
+    });
+    if (!connection || connection.provider !== 'KIRAGO') {
+      throw new NotFoundException('Conexao WhatsApp Kirago nao encontrada.');
+    }
+
+    const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
+    const providerStatus = await this.mapProviderError(() =>
+      this.provider.getStatus(instanceToken),
+    );
+    const providerIdentity = this.normalizeBusinessWhatsAppIdentity(providerStatus.phone);
+    if (!providerIdentity) {
+      this.logger.warn(
+        `WhatsApp business identity refresh connection=${connection.id} ` +
+          'source=KIRAGO_SESSION_STATUS outcome=REJECTED_MISSING_OR_INVALID',
+      );
+      throw new ConflictException(
+        'A Kirago nao retornou identidade empresarial valida para esta conexao.',
+      );
+    }
+
+    const currentIdentity = this.normalizeBusinessWhatsAppIdentity(connection.phone);
+    if (currentIdentity === providerIdentity) {
+      this.logger.log(
+        `WhatsApp business identity refresh connection=${connection.id} ` +
+          'source=KIRAGO_SESSION_STATUS outcome=UNCHANGED',
+      );
+      return this.presentConnection(connection);
+    }
+
+    const updated = await this.prisma.whatsAppConnection.update({
+      where: { id: connection.id },
+      data: { phone: providerIdentity },
+    });
+    this.logger.log(
+      `WhatsApp business identity refresh connection=${connection.id} ` +
+        'source=KIRAGO_SESSION_STATUS outcome=UPDATED',
+    );
+    return this.presentConnection(updated);
+  }
+
   async provisionConnection(dto: CreateWhatsAppConnectionDto) {
     const existing = await this.findPrimaryConnection();
 
@@ -680,6 +790,25 @@ export class WhatsAppService {
     const status = this.mapStatus(providerStatus.connected, providerStatus.loggedIn);
     const connectedAt =
       status === 'CONNECTED' && !connection.connectedAt ? new Date() : connection.connectedAt;
+    const providerBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(providerStatus.phone);
+    const currentBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(connection.phone);
+    const nextBusinessPhone = providerBusinessIdentity ?? connection.phone;
+
+    const identityOutcome = providerStatus.phone
+      ? providerBusinessIdentity
+        ? providerBusinessIdentity === currentBusinessIdentity
+          ? 'UNCHANGED'
+          : 'UPDATED'
+        : 'REJECTED_INVALID'
+      : 'SOURCE_MISSING';
+    const identityLog =
+      `WhatsApp business identity refresh connection=${connection.id} ` +
+      `source=KIRAGO_SESSION_STATUS outcome=${identityOutcome}`;
+    if (identityOutcome === 'REJECTED_INVALID' || identityOutcome === 'SOURCE_MISSING') {
+      this.logger.warn(identityLog);
+    } else {
+      this.logger.log(identityLog);
+    }
 
     const updated = await this.prisma.whatsAppConnection.update({
       where: { id: connection.id },
@@ -687,7 +816,7 @@ export class WhatsAppService {
         status,
         connected: providerStatus.connected,
         loggedIn: providerStatus.loggedIn,
-        phone: providerStatus.phone ?? connection.phone,
+        phone: nextBusinessPhone,
         lastStatusAt: new Date(),
         connectedAt,
       },
@@ -6503,7 +6632,7 @@ export class WhatsAppService {
     }
   }
 
-  private normalizeBusinessWhatsAppIdentity(phone: string | null) {
+  private normalizeBusinessWhatsAppIdentity(phone: string | null | undefined) {
     if (!phone) return null;
     const trimmed = phone.trim();
     const directIdentity = normalizePhone(trimmed);
@@ -6513,6 +6642,13 @@ export class WhatsAppService {
     if (!/^\d{8,15}$/.test(trimmed)) return null;
     const providerIdentity = normalizePhone(`+${trimmed}`);
     return providerIdentity.status === 'valid' ? providerIdentity.e164 : null;
+  }
+
+  private classifyBusinessWhatsAppIdentity(phone: string | null | undefined) {
+    if (!phone?.trim()) return 'MISSING' as const;
+    return this.normalizeBusinessWhatsAppIdentity(phone)
+      ? ('VALID' as const)
+      : ('INVALID' as const);
   }
 
   private async assertConversationIsCurrentOutboundTarget(

@@ -305,9 +305,7 @@ export class KiragoInstanceClient {
   ) {
     return this.http.request<KiragoEnvelope<KiragoSendButtonsData>>('/chat/send/buttons', {
       method: 'POST',
-      headers: {
-        Authorization: this.instanceBearer(instanceToken),
-      },
+      headers: { token: instanceToken },
       body: payload,
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

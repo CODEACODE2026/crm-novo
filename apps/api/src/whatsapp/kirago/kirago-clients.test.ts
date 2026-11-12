@@ -448,7 +448,7 @@ describe('Kirago clients', () => {
     });
   });
 
-  it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
+  it('sends PIX buttons with the normal instance token header', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
     const client = new KiragoInstanceClient({ request } as never);
 
@@ -469,7 +469,7 @@ describe('Kirago clients', () => {
 
     expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
       method: 'POST',
-      headers: { Authorization: 'Bearer instance-token' },
+      headers: { token: 'instance-token' },
       body: {
         phone: '5544999999999',
         title: 'PIX',
@@ -514,7 +514,7 @@ describe('Kirago clients', () => {
 
       expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
         method: 'POST',
-        headers: { Authorization: 'Bearer instance-token' },
+        headers: { token: 'instance-token' },
         body: {
           phone,
           title: 'PIX',

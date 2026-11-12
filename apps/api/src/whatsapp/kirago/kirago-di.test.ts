@@ -432,6 +432,43 @@ describe('Kirago dependency injection', () => {
     });
   });
 
+  it('accepts only successful button envelopes with an identifier', async () => {
+    app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
+
+    const instanceClient = app.get(KiragoInstanceClient);
+    const provider = app.get(KiragoWhatsAppProvider);
+    const sendButtons = vi.spyOn(instanceClient, 'sendButtons').mockResolvedValue({
+      success: true,
+      code: 200,
+      data: { Id: 'button-message-id' },
+    });
+    const input = {
+      phone: '5544999999999',
+      title: 'PIX',
+      body: 'Mensagem',
+      buttons: [
+        {
+          name: 'cta_copy',
+          buttonParamsJson: { display_text: 'Copiar Chave PIX', copy_code: 'PIX-CODE' },
+        },
+      ],
+    };
+
+    await expect(provider.sendButtons('instance-token', input)).resolves.toEqual({
+      providerMessageId: 'button-message-id',
+    });
+
+    sendButtons.mockResolvedValueOnce({ success: false, code: 200, data: {} });
+    await expect(provider.sendButtons('instance-token', input)).rejects.toThrow(
+      'Falha ao enviar botoes na Kirago.',
+    );
+
+    sendButtons.mockResolvedValueOnce({ success: true, code: 400, data: {} });
+    await expect(provider.sendButtons('instance-token', input)).rejects.toThrow(
+      'Falha ao enviar botoes na Kirago.',
+    );
+  });
+
   it('accepts successful edit envelopes independently of Details and rejects false success', async () => {
     app = await NestFactory.createApplicationContext(KiragoTestModule, { logger: false });
 

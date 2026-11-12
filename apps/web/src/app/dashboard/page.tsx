@@ -91,6 +91,11 @@ import {
 } from '@crm-novo/shared';
 import { buildApiUrl } from '../../lib/api';
 import { ClientForm } from '../../components/clients/client-form';
+import {
+  isValidMercadoPagoPayerEmail,
+  mercadoPagoPayerEmailOrNull,
+  normalizeMercadoPagoPayerEmail,
+} from '../../components/clients/mercado-pago-email';
 import { FinanceClientAutocomplete } from '../../components/clients/finance-client-autocomplete';
 import { WhatsAppInbox } from '../../components/whatsapp/WhatsAppInbox';
 import { WhatsAppAttendanceAnalyticsView } from '../../components/whatsapp/WhatsAppAttendanceAnalytics';
@@ -265,6 +270,8 @@ import {
   sendBillingNow,
   sendPaymentIntentWhatsApp,
   savePaymentProviderCredential,
+  savePaymentProviderWhatsAppPixSettings,
+  savePaymentWebhookSecret,
   setDefaultPaymentProvider,
   testPaymentProviderCredential,
   updateMessageTemplate,
@@ -289,6 +296,7 @@ import {
   type ClientStatus,
   type ClientUpdatePayload,
   type ConfigurablePaymentProvider,
+  type GroupedPaymentProvider,
   type DashboardSummary as DashboardSummaryPayload,
   type FinancialCategory,
   type FinancialPaymentMethod,
@@ -317,6 +325,7 @@ import {
   type PaymentIntentStatus,
   type PaymentProviderCredentialStatus,
   type PaymentProviderCode,
+  type PaymentProviderEnvironment,
   type PixReconciliationPreview,
   type PixWhatsAppSendResult,
   type PixReplacementRecoveryPreview,
@@ -357,6 +366,10 @@ import {
   type WhatsAppQuickReplyPayload,
 } from '../../lib/crm-api';
 import { readLegacyImportJsonFile } from '../../lib/legacy-import-file';
+import {
+  isOperationalPixProviderCredential,
+  paymentProviderCredentialReadiness,
+} from '../../lib/payment-provider-readiness';
 import {
   canStartWhatsAppAction,
   extractWebhookUrl,
@@ -4359,7 +4372,14 @@ const configurablePaymentProviders = [
   'FASTFLOW',
   'FASTPAY',
   'FASTPIX',
+  'MERCADO_PAGO',
 ] satisfies ConfigurablePaymentProvider[];
+
+const groupedPaymentProviders = [
+  'FASTFLOW',
+  'FASTPAY',
+  'FASTPIX',
+] satisfies GroupedPaymentProvider[];
 
 function ReferralsView({ clients }: { clients: Client[] }) {
   const [items, setItems] = useState<Referral[]>([]);
@@ -6709,6 +6729,12 @@ function SettingsPaymentsPanel({
                 `${paymentProviderLabel(provider)} configurado.`,
               )
             }
+            onSaveWhatsAppPixSettings={(payload) =>
+              runAction(
+                () => savePaymentProviderWhatsAppPixSettings(provider, payload),
+                `Nome PIX no WhatsApp do ${paymentProviderLabel(provider)} configurado.`,
+              )
+            }
             onSetDefault={() =>
               runAction(
                 () => setDefaultPaymentProvider(provider),
@@ -6725,6 +6751,12 @@ function SettingsPaymentsPanel({
               runAction(
                 () => registerPaymentWebhook(provider),
                 `Webhook do ${paymentProviderLabel(provider)} registrado.`,
+              )
+            }
+            onSaveWebhookSecret={(secret) =>
+              runAction(
+                () => savePaymentWebhookSecret(provider, secret),
+                `Secret do webhook ${paymentProviderLabel(provider)} configurado.`,
               )
             }
           />
@@ -9551,6 +9583,8 @@ function PaymentProviderCard({
   onDeactivate,
   onRegisterWebhook,
   onSave,
+  onSaveWhatsAppPixSettings,
+  onSaveWebhookSecret,
   onSetDefault,
   onTest,
 }: {
@@ -9563,15 +9597,30 @@ function PaymentProviderCard({
     provider: ConfigurablePaymentProvider;
     name: string;
     token: string;
+    environment?: PaymentProviderEnvironment;
   }) => Promise<boolean>;
+  onSaveWhatsAppPixSettings: (payload: {
+    merchantName: string;
+    environment?: PaymentProviderEnvironment;
+  }) => Promise<boolean>;
+  onSaveWebhookSecret: (secret: string) => Promise<boolean>;
   onSetDefault: () => Promise<boolean>;
   onTest: () => Promise<boolean>;
 }) {
   const [name, setName] = useState(credential.name ?? paymentProviderLabel(provider));
   const [token, setToken] = useState('');
+  const [environment, setEnvironment] = useState<PaymentProviderEnvironment>(
+    credential.environment ?? 'TEST',
+  );
+  const [webhookSecret, setWebhookSecret] = useState('');
+  const [whatsappPixMerchantName, setWhatsAppPixMerchantName] = useState(
+    credential.whatsappPixMerchantName ?? '',
+  );
   const [configOpen, setConfigOpen] = useState(false);
+  const [whatsappPixOpen, setWhatsAppPixOpen] = useState(false);
   const [webhookOpen, setWebhookOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingWhatsAppPix, setSavingWhatsAppPix] = useState(false);
   const [registeringWebhook, setRegisteringWebhook] = useState(false);
   const [testing, setTesting] = useState(false);
   const actionRef = useRef(false);
@@ -9579,28 +9628,37 @@ function PaymentProviderCard({
   useEffect(() => {
     setName(credential.name ?? paymentProviderLabel(provider));
     setToken('');
-  }, [credential.name, provider]);
+    setEnvironment(credential.environment ?? 'TEST');
+    setWebhookSecret('');
+    setWhatsAppPixMerchantName(credential.whatsappPixMerchantName ?? '');
+  }, [credential.environment, credential.name, credential.whatsappPixMerchantName, provider]);
 
   const providerName = paymentProviderLabel(provider);
   const configured = credential.configured;
   const statusLabel = paymentProviderStatusLabel(credential.status);
   const webhookRegistered = Boolean(credential.webhookRegisteredAt);
+  const isMercadoPago = provider === 'MERCADO_PAGO';
   const canSaveCredential = token.trim().length >= 12;
-  const canSubmitConfig = canSaveCredential;
+  const canSubmitConfig = canSaveCredential && (!isMercadoPago || environment === 'TEST');
   const webhookUrl = credential.webhookUrl ?? `/payment-webhooks/${provider.toLowerCase()}`;
-  const actionDisabled = loading || saving || testing || registeringWebhook;
-  const canSetDefault = provider !== 'FASTPIX';
+  const actionDisabled = loading || saving || savingWhatsAppPix || testing || registeringWebhook;
+  const mercadoPagoReadiness = isMercadoPago
+    ? paymentProviderCredentialReadiness(credential)
+    : null;
+  const canSetDefault = provider !== 'FASTPIX' && !isMercadoPago;
 
   function closeConfigModal() {
     if (saving) return;
     setConfigOpen(false);
     setToken('');
     setName(credential.name ?? providerName);
+    setEnvironment(credential.environment ?? 'TEST');
   }
 
   function closeWebhookModal() {
     if (registeringWebhook) return;
     setWebhookOpen(false);
+    setWebhookSecret('');
   }
 
   async function guardedAction(
@@ -9626,7 +9684,7 @@ function PaymentProviderCard({
     if (!canSubmitConfig) return;
 
     const saved = await guardedAction(async () => {
-      return onSave({ provider, name, token });
+      return onSave({ provider, name, token, ...(isMercadoPago ? { environment } : {}) });
     }, setSaving);
 
     if (!saved) return;
@@ -9645,6 +9703,33 @@ function PaymentProviderCard({
     const registered = await guardedAction(onRegisterWebhook, setRegisteringWebhook);
     if (!registered) return;
     setWebhookOpen(false);
+  }
+
+  async function handleSaveWebhookSecret() {
+    if (!configured || webhookSecret.trim().length < 16) return;
+    const saved = await guardedAction(
+      () => onSaveWebhookSecret(webhookSecret.trim()),
+      setRegisteringWebhook,
+    );
+    if (!saved) return;
+    setWebhookOpen(false);
+    setWebhookSecret('');
+  }
+
+  async function handleWhatsAppPixSubmit(event: FormEvent) {
+    event.preventDefault();
+    const merchantName = whatsappPixMerchantName.trim();
+    if (merchantName.length < 2 || merchantName.length > 25) return;
+
+    const saved = await guardedAction(
+      () =>
+        onSaveWhatsAppPixSettings({
+          merchantName,
+          ...(isMercadoPago ? { environment: credential.environment ?? environment } : {}),
+        }),
+      setSavingWhatsAppPix,
+    );
+    if (saved) setWhatsAppPixOpen(false);
   }
 
   return (
@@ -9666,9 +9751,14 @@ function PaymentProviderCard({
                 onSelect: () => setConfigOpen(true),
               },
               {
+                icon: QrCode,
+                label: 'Nome PIX no WhatsApp',
+                onSelect: () => setWhatsAppPixOpen(true),
+              },
+              {
                 disabled: !configured || actionDisabled,
                 icon: ShieldCheck,
-                label: 'Ver webhook',
+                label: isMercadoPago ? 'Ver assinatura' : 'Ver webhook',
                 onSelect: () => setWebhookOpen(true),
               },
               {
@@ -9684,7 +9774,7 @@ function PaymentProviderCard({
               {
                 disabled: !configured || actionDisabled,
                 icon: Workflow,
-                label: 'Configurar webhook',
+                label: isMercadoPago ? 'Configurar assinatura' : 'Configurar webhook',
                 onSelect: () => setWebhookOpen(true),
               },
               {
@@ -9704,9 +9794,35 @@ function PaymentProviderCard({
           <dt>Conexão</dt>
           <dd>{configured ? 'Configurada' : 'Não configurada'}</dd>
         </div>
+        {isMercadoPago ? (
+          <div>
+            <dt>Ambiente</dt>
+            <dd>{paymentProviderEnvironmentLabel(credential.environment ?? environment)}</dd>
+          </div>
+        ) : null}
+        {mercadoPagoReadiness ? (
+          <div>
+            <dt>Prova TEST</dt>
+            <dd>{mercadoPagoReadiness.label}</dd>
+          </div>
+        ) : null}
+        {isMercadoPago && credential.environmentProofExpiresAt ? (
+          <div>
+            <dt>Validade da prova</dt>
+            <dd>{formatDateTime(credential.environmentProofExpiresAt)}</dd>
+          </div>
+        ) : null}
         <div>
-          <dt>Webhook</dt>
-          <dd>{webhookRegistered ? 'Registrado' : 'Não registrado'}</dd>
+          <dt>{isMercadoPago ? 'Assinatura' : 'Webhook'}</dt>
+          <dd>
+            {isMercadoPago
+              ? credential.webhookSecretConfigured
+                ? 'Configurada'
+                : 'Não configurada'
+              : webhookRegistered
+                ? 'Registrado'
+                : 'Não registrado'}
+          </dd>
         </div>
         {credential.validatedAt ? (
           <div>
@@ -9720,6 +9836,10 @@ function PaymentProviderCard({
             <dd>Sim</dd>
           </div>
         ) : null}
+        <div>
+          <dt>Recebedor PIX no WhatsApp</dt>
+          <dd>{credential.whatsappPixMerchantName ?? 'Não configurado'}</dd>
+        </div>
       </dl>
 
       <div className="payment-provider-secret-summary">
@@ -9730,6 +9850,14 @@ function PaymentProviderCard({
         <span>Webhook secret</span>
         <strong>{credential.webhookSecretConfigured ? 'Configurado' : 'Não configurado'}</strong>
       </div>
+
+      {mercadoPagoReadiness ? (
+        <div className={`notice ${mercadoPagoReadiness.tone}`}>
+          {mercadoPagoReadiness.operational
+            ? 'Identidade TEST verificada. PRODUCTION permanece bloqueado até homologação separada.'
+            : mercadoPagoReadiness.reason}
+        </div>
+      ) : null}
 
       <div className="button-row payment-provider-primary-actions">
         <button
@@ -9785,15 +9913,41 @@ function PaymentProviderCard({
                 <input value={name} onChange={(event) => setName(event.target.value)} />
               </label>
               <label className="field">
-                <span>Chave API</span>
+                <span>{isMercadoPago ? 'Access token' : 'Chave API'}</span>
                 <input
                   autoComplete="off"
-                  placeholder={configured ? 'Chave configurada' : 'fdpx_test_123'}
+                  placeholder={
+                    configured
+                      ? 'Credencial configurada'
+                      : isMercadoPago
+                        ? 'APP_USR-… ou TEST-…'
+                        : 'fdpx_test_123'
+                  }
                   type="password"
                   value={token}
                   onChange={(event) => setToken(event.target.value)}
                 />
               </label>
+              {isMercadoPago ? (
+                <label className="field">
+                  <span>Ambiente</span>
+                  <select
+                    value={environment}
+                    onChange={(event) =>
+                      setEnvironment(event.target.value as PaymentProviderEnvironment)
+                    }
+                  >
+                    <option value="TEST">Teste</option>
+                    <option disabled value="PRODUCTION">
+                      Produção — bloqueada até homologação
+                    </option>
+                  </select>
+                  <small>
+                    Nesta fase, somente credenciais TEST podem ser salvas e utilizadas. Tokens nunca
+                    são exibidos após o salvamento.
+                  </small>
+                </label>
+              ) : null}
             </div>
 
             <div className="form-actions">
@@ -9817,6 +9971,72 @@ function PaymentProviderCard({
         </div>
       ) : null}
 
+      {whatsappPixOpen ? (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onKeyDown={(event: ReactKeyboardEvent<HTMLDivElement>) => {
+            if (event.key === 'Escape' && !savingWhatsAppPix) setWhatsAppPixOpen(false);
+          }}
+        >
+          <form
+            className="modal payment-provider-config-modal"
+            onSubmit={(event) => void handleWhatsAppPixSubmit(event)}
+          >
+            <div className="modal-header">
+              <div>
+                <h2>PIX no WhatsApp — {providerName}</h2>
+                <p>Nome exibido somente no botão PIX enviado pelo WhatsApp.</p>
+              </div>
+              <button
+                aria-label="Fechar"
+                className="icon-button"
+                disabled={savingWhatsAppPix}
+                type="button"
+                onClick={() => setWhatsAppPixOpen(false)}
+              >
+                <X aria-hidden="true" size={18} />
+              </button>
+            </div>
+            <div className="payment-provider-config-body">
+              <label className="field">
+                <span>Nome do recebedor PIX no WhatsApp</span>
+                <input
+                  maxLength={25}
+                  value={whatsappPixMerchantName}
+                  onChange={(event) => setWhatsAppPixMerchantName(event.target.value)}
+                />
+                <small>
+                  Esta configuração não altera o titular bancário, a cobrança nem a credencial do
+                  provedor.
+                </small>
+              </label>
+            </div>
+            <div className="form-actions">
+              <button
+                className="secondary-button"
+                disabled={savingWhatsAppPix}
+                type="button"
+                onClick={() => setWhatsAppPixOpen(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                className="primary-button"
+                disabled={
+                  savingWhatsAppPix ||
+                  whatsappPixMerchantName.trim().length < 2 ||
+                  whatsappPixMerchantName.trim().length > 25
+                }
+                type="submit"
+              >
+                {savingWhatsAppPix ? 'Salvando...' : 'Salvar nome'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
       {webhookOpen ? (
         <div
           className="modal-backdrop"
@@ -9833,8 +10053,9 @@ function PaymentProviderCard({
               <div>
                 <h2 id="payment-webhook-title">Webhook {providerName}</h2>
                 <p>
-                  O secret será obtido automaticamente após o registro e armazenado de forma
-                  criptografada.
+                  {isMercadoPago
+                    ? 'Informe o secret da assinatura configurado no painel Mercado Pago. Ele será armazenado criptografado e nunca será exibido novamente.'
+                    : 'O secret será obtido automaticamente após o registro e armazenado de forma criptografada.'}
                 </p>
               </div>
               <button
@@ -9862,10 +10083,34 @@ function PaymentProviderCard({
             <div className="payment-provider-secret-summary">
               <span>Eventos</span>
               <strong>
-                transaction.created, transaction.approved, transaction.paid, transaction.expired,
-                transaction.refunded
+                {isMercadoPago
+                  ? 'Order (Mercado Pago) — type=order, com confirmação autenticada no backend'
+                  : 'transaction.created, transaction.approved, transaction.paid, transaction.expired, transaction.refunded'}
               </strong>
             </div>
+
+            {isMercadoPago ? (
+              <div className="notice warning">
+                A entrega HTTPS oficial permanece bloqueada até o gate de publicação em produção.
+              </div>
+            ) : null}
+
+            {isMercadoPago ? (
+              <label className="field">
+                <span>Secret da assinatura</span>
+                <input
+                  autoComplete="off"
+                  placeholder={
+                    credential.webhookSecretConfigured
+                      ? 'Secret já configurado — informe apenas para substituir'
+                      : 'Informe o secret do webhook'
+                  }
+                  type="password"
+                  value={webhookSecret}
+                  onChange={(event) => setWebhookSecret(event.target.value)}
+                />
+              </label>
+            ) : null}
 
             <div className="form-actions">
               <button
@@ -9878,11 +10123,21 @@ function PaymentProviderCard({
               </button>
               <button
                 className="primary-button"
-                disabled={registeringWebhook || !configured}
+                disabled={
+                  registeringWebhook ||
+                  !configured ||
+                  (isMercadoPago && webhookSecret.trim().length < 16)
+                }
                 type="button"
-                onClick={() => void handleRegisterWebhook()}
+                onClick={() =>
+                  void (isMercadoPago ? handleSaveWebhookSecret() : handleRegisterWebhook())
+                }
               >
-                {registeringWebhook ? 'Registrando...' : 'Confirmar registro'}
+                {registeringWebhook
+                  ? 'Salvando...'
+                  : isMercadoPago
+                    ? 'Salvar secret'
+                    : 'Confirmar registro'}
               </button>
             </div>
           </section>
@@ -9895,12 +10150,16 @@ function PaymentProviderCard({
 function paymentProviderLabel(provider: ConfigurablePaymentProvider) {
   if (provider === 'FASTFLOW') return 'FastFlow';
   if (provider === 'FASTPIX') return 'FastPIX';
+  if (provider === 'MERCADO_PAGO') return 'Mercado Pago';
   return 'FastPay';
 }
 
 function paymentProviderDescription(provider: ConfigurablePaymentProvider) {
   if (provider === 'FASTFLOW') return 'Pagamentos via PIX FastFlow';
   if (provider === 'FASTPIX') return 'Pagamentos via PIX FastPIX alternativo manual';
+  if (provider === 'MERCADO_PAGO') {
+    return 'PIX individual via Orders API, com confirmação autenticada no backend';
+  }
   return 'Pagamentos via PIX FastPay';
 }
 
@@ -9908,7 +10167,12 @@ function paymentProviderStatusLabel(status: PaymentProviderCredentialStatus['sta
   if (status === 'VALIDO') return 'Configurado';
   if (status === 'CONFIGURADO') return 'Configurado';
   if (status === 'ERRO') return 'Erro';
+  if (status === 'DESABILITADO') return 'Desabilitado';
   return 'Não configurado';
+}
+
+function paymentProviderEnvironmentLabel(environment: PaymentProviderEnvironment) {
+  return environment === 'TEST' ? 'Teste' : 'Produção';
 }
 
 function ClientEventIcon({ type }: { type: string }) {
@@ -15582,6 +15846,7 @@ function paymentProviderDisplay(provider: PaymentProviderCode) {
     FASTPIX: 'FastPIX',
     FASTPAY: 'FastPay',
     DEPIX: 'Depix',
+    MERCADO_PAGO: 'Mercado Pago',
   };
 
   return labels[provider];
@@ -15591,12 +15856,8 @@ function isConfigurablePixProvider(provider: unknown): provider is ConfigurableP
   return configurablePaymentProviders.includes(provider as ConfigurablePaymentProvider);
 }
 
-function isOperationalPixProviderCredential(credential: PaymentProviderCredentialStatus) {
-  return (
-    credential.configured &&
-    credential.active !== false &&
-    (credential.status === 'CONFIGURADO' || credential.status === 'VALIDO')
-  );
+function isGroupedPixProvider(provider: unknown): provider is GroupedPaymentProvider {
+  return groupedPaymentProviders.includes(provider as GroupedPaymentProvider);
 }
 
 function replacementProviderLabel(
@@ -17238,6 +17499,7 @@ type ManualChargePayerMode = 'REGISTERED_CLIENT' | 'GUEST';
 type ManualChargeStep = 'FORM' | 'SUMMARY' | 'PIX';
 type ManualPixWorkingAction = 'create' | 'generate' | 'whatsapp' | 'replace' | 'cancel' | null;
 type PixProviderSelectionSource = 'SYSTEM_DEFAULT' | 'CLIENT_PREFERENCE' | 'USER_SELECTED';
+type MercadoPagoEmailAction = 'generate' | 'replace';
 
 type ManualChargeFormState = {
   description: string;
@@ -17316,6 +17578,107 @@ function clientOptionFromTransactionClient(
     preferredPixProvider: null,
     reference: client.reference,
   };
+}
+
+function MercadoPagoEmailModal({
+  canSave,
+  initialEmail,
+  onClose,
+  onConfirm,
+}: {
+  canSave: boolean;
+  initialEmail: string;
+  onClose: () => void;
+  onConfirm: (payload: { email: string; saveToClient: boolean }) => Promise<void>;
+}) {
+  const [email, setEmail] = useState(() => normalizeMercadoPagoPayerEmail(initialEmail));
+  const [saveToClient, setSaveToClient] = useState(canSave);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const valid = isValidMercadoPagoPayerEmail(email);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving || !valid) return;
+
+    setSaving(true);
+    setError('');
+    try {
+      await onConfirm({
+        email: normalizeMercadoPagoPayerEmail(email),
+        saveToClient: canSave && saveToClient,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Não foi possível confirmar o e-mail.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop mercado-pago-email-backdrop" role="presentation">
+      <form
+        className="modal mercado-pago-email-modal"
+        aria-labelledby="mercado-pago-email-title"
+        onSubmit={(event) => void submit(event)}
+      >
+        <header className="modal-header modal-header-with-icon">
+          <span className="modal-icon info" aria-hidden="true">
+            <Mail size={16} />
+          </span>
+          <div>
+            <h2 id="mercado-pago-email-title">E-mail para o Mercado Pago</h2>
+            <p>O provedor exige um e-mail válido para gerar este PIX.</p>
+          </div>
+          <IconButton disabled={saving} icon={X} label="Fechar" onClick={onClose} />
+        </header>
+
+        <label className="field">
+          <span>E-mail do pagador</span>
+          <input
+            autoComplete="email"
+            inputMode="email"
+            placeholder="cliente@exemplo.com"
+            type="email"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+          />
+          <small>Usado somente nesta cobrança, salvo no cadastro apenas com sua confirmação.</small>
+        </label>
+
+        {canSave ? (
+          <label className="choice-row">
+            <input
+              checked={saveToClient}
+              type="checkbox"
+              onChange={(event) => setSaveToClient(event.target.checked)}
+            />
+            <span>Salvar este e-mail no cadastro do cliente</span>
+          </label>
+        ) : null}
+
+        {email && !valid ? (
+          <div className="notice danger" role="alert">
+            Informe um endereço de e-mail válido.
+          </div>
+        ) : null}
+        {error ? (
+          <div className="notice danger" role="alert">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="form-actions">
+          <Button disabled={saving} variant="secondary" onClick={onClose}>
+            Cancelar
+          </Button>
+          <Button disabled={saving || !valid} icon={QrCode} loading={saving} type="submit">
+            Confirmar e gerar PIX
+          </Button>
+        </div>
+      </form>
+    </div>
+  );
 }
 
 function TransactionSection({
@@ -17474,6 +17837,8 @@ function TransactionModal({
   const [pixNotice, setPixNotice] = useState('');
   const [pixSendingWhatsApp, setPixSendingWhatsApp] = useState(false);
   const [pixWhatsAppFailed, setPixWhatsAppFailed] = useState(false);
+  const [mercadoPagoEmailAction, setMercadoPagoEmailAction] =
+    useState<MercadoPagoEmailAction | null>(null);
   const [manualPixWorkingAction, setManualPixWorkingAction] =
     useState<ManualPixWorkingAction>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -17544,6 +17909,7 @@ function TransactionModal({
     setManualPixIntent(null);
     setPixNotice('');
     setPixWhatsAppFailed(false);
+    setMercadoPagoEmailAction(null);
     setManualPixWorkingAction(null);
     manualChargeIdempotencyKeyRef.current = createFrontendIdempotencyKey('manual-charge');
     setFormError('');
@@ -17643,6 +18009,7 @@ function TransactionModal({
     setManualPixIntent(null);
     setPixNotice('');
     setPixWhatsAppFailed(false);
+    setMercadoPagoEmailAction(null);
     setManualPixWorkingAction(null);
     setFormError('');
     onClose();
@@ -17752,8 +18119,15 @@ function TransactionModal({
     }
   }
 
-  async function generateManualPix() {
+  async function generateManualPix(payerEmail?: string) {
     if (!manualCharge || manualPixActionRef.current || !selectedManualPixProvider) return;
+
+    const resolvedPayerEmail =
+      payerEmail ?? mercadoPagoPayerEmailOrNull(selectedManualChargeClient?.email);
+    if (selectedManualPixProvider === 'MERCADO_PAGO' && !resolvedPayerEmail) {
+      setMercadoPagoEmailAction('generate');
+      return;
+    }
 
     manualPixActionRef.current = true;
     setManualPixWorkingAction('generate');
@@ -17765,6 +18139,9 @@ function TransactionModal({
         manualCharge.id,
         manualPixProviderSelectionSource === 'USER_SELECTED'
           ? (selectedManualPixProvider ?? undefined)
+          : undefined,
+        selectedManualPixProvider === 'MERCADO_PAGO'
+          ? (resolvedPayerEmail ?? undefined)
           : undefined,
       );
       setManualPixIntent(intent);
@@ -17832,13 +18209,20 @@ function TransactionModal({
     }
   }
 
-  async function replaceManualPixProvider() {
+  async function replaceManualPixProvider(payerEmail?: string) {
     if (
       !manualCharge ||
       !manualPixIntent ||
       !selectedManualPixProvider ||
       manualPixActionRef.current
     ) {
+      return;
+    }
+
+    const resolvedPayerEmail =
+      payerEmail ?? mercadoPagoPayerEmailOrNull(selectedManualChargeClient?.email);
+    if (selectedManualPixProvider === 'MERCADO_PAGO' && !resolvedPayerEmail) {
+      setMercadoPagoEmailAction('replace');
       return;
     }
 
@@ -17852,6 +18236,9 @@ function TransactionModal({
         expectedCurrentIntentId: manualPixIntent.id,
         idempotencyKey: `manual-pix-replace:${manualCharge.id}:${manualPixIntent.id}:${selectedManualPixProvider}`,
         provider: selectedManualPixProvider,
+        ...(selectedManualPixProvider === 'MERCADO_PAGO' && resolvedPayerEmail
+          ? { payerEmail: resolvedPayerEmail }
+          : {}),
         reason: 'Troca de provider pela cobrança PIX manual',
       });
       setManualPixIntent(intent);
@@ -18094,6 +18481,24 @@ function TransactionModal({
           </div>
         </form>
       </section>
+      {mercadoPagoEmailAction ? (
+        <MercadoPagoEmailModal
+          canSave={Boolean(selectedManualChargeClient?.id)}
+          initialEmail={selectedManualChargeClient?.email ?? ''}
+          onClose={() => setMercadoPagoEmailAction(null)}
+          onConfirm={async ({ email, saveToClient }) => {
+            if (saveToClient && selectedManualChargeClient) {
+              const updatedClient = await updateClient(selectedManualChargeClient.id, { email });
+              setSelectedManualChargeClient(clientOptionFromClient(updatedClient));
+            }
+
+            const action = mercadoPagoEmailAction;
+            setMercadoPagoEmailAction(null);
+            if (action === 'generate') await generateManualPix(email);
+            else await replaceManualPixProvider(email);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -19231,6 +19636,10 @@ function PixReceivableModal({
   const [replaceReason, setReplaceReason] = useState('');
   const [replacementProvider, setReplacementProvider] =
     useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [creationProvider, setCreationProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [mercadoPagoEmailAction, setMercadoPagoEmailAction] =
+    useState<MercadoPagoEmailAction | null>(null);
+  const [clientEmail, setClientEmail] = useState(receivable.client?.email ?? null);
   const [replacementPreview, setReplacementPreview] = useState<PixReplacementPreview | null>(null);
   const actionRef = useRef(false);
   const previewActionRef = useRef(false);
@@ -19256,10 +19665,19 @@ function PixReceivableModal({
     ) ??
     eligibleReplacementProviders[0] ??
     null;
+  const preferredCreationProvider =
+    receivable.client?.preferredPixProvider &&
+    isConfigurablePixProvider(receivable.client.preferredPixProvider) &&
+    eligibleReplacementProviders.includes(receivable.client.preferredPixProvider)
+      ? receivable.client.preferredPixProvider
+      : null;
   const canUseReplacementProvider = eligibleReplacementProviders.includes(replacementProvider);
   const selectedReplacementProvider = canUseReplacementProvider
     ? replacementProvider
     : defaultReplacementProvider;
+  const selectedCreationProvider = eligibleReplacementProviders.includes(creationProvider)
+    ? creationProvider
+    : (preferredCreationProvider ?? defaultReplacementProvider);
 
   const loadIntents = useCallback(
     async (
@@ -19336,9 +19754,15 @@ function PixReceivableModal({
     setExpandedHistoryIntentId(null);
     if (defaultReplacementProvider) {
       setReplacementProvider(defaultReplacementProvider);
+      setCreationProvider(preferredCreationProvider ?? defaultReplacementProvider);
       setReplacementPreview(null);
     }
-  }, [activeIntent?.id, activeIntent?.status, defaultReplacementProvider]);
+  }, [
+    activeIntent?.id,
+    activeIntent?.status,
+    defaultReplacementProvider,
+    preferredCreationProvider,
+  ]);
 
   useEffect(() => {
     if (!selectedReplacementProvider || selectedReplacementProvider === replacementProvider) return;
@@ -19546,7 +19970,7 @@ function PixReceivableModal({
     }
   }
 
-  async function runReplacementConfirm() {
+  async function runReplacementConfirm(payerEmail?: string) {
     if (
       !activeIntent ||
       !replacementPreview?.replaceable ||
@@ -19558,18 +19982,52 @@ function PixReceivableModal({
       return;
     }
 
+    const resolvedPayerEmail = payerEmail ?? mercadoPagoPayerEmailOrNull(clientEmail);
+    if (selectedReplacementProvider === 'MERCADO_PAGO' && !resolvedPayerEmail) {
+      setMercadoPagoEmailAction('replace');
+      return;
+    }
+
     await runAction(
       () =>
         replaceReceivablePix(receivable.id, {
           provider: selectedReplacementProvider,
           expectedCurrentIntentId: activeIntent.id,
           idempotencyKey: `pix-replace:${receivable.id}:${activeIntent.id}:${selectedReplacementProvider}`,
+          ...(selectedReplacementProvider === 'MERCADO_PAGO' && resolvedPayerEmail
+            ? { payerEmail: resolvedPayerEmail }
+            : {}),
           ...(replaceReason.trim() ? { reason: replaceReason.trim() } : {}),
         }),
       'Novo PIX gerado.',
     );
     setShowReplacement(false);
     setReplacementPreview(null);
+  }
+
+  async function createNewPix(payerEmail?: string) {
+    if (!selectedCreationProvider) {
+      setError('Nenhum provider PIX configurado para gerar a cobrança.');
+      return;
+    }
+
+    const resolvedPayerEmail = payerEmail ?? mercadoPagoPayerEmailOrNull(clientEmail);
+    if (selectedCreationProvider === 'MERCADO_PAGO' && !resolvedPayerEmail) {
+      setMercadoPagoEmailAction('generate');
+      return;
+    }
+
+    await runAction(
+      () =>
+        createReceivablePix(
+          receivable.id,
+          selectedCreationProvider,
+          selectedCreationProvider === 'MERCADO_PAGO'
+            ? (resolvedPayerEmail ?? undefined)
+            : undefined,
+        ),
+      'PIX gerado.',
+    );
   }
 
   const canCreateNew =
@@ -19851,7 +20309,13 @@ function PixReceivableModal({
                   }
                 >
                   <RefreshCcw aria-hidden="true" size={16} />
-                  {busy ? 'Sincronizando...' : 'Sincronizar'}
+                  {busy
+                    ? activeIntent.provider === 'MERCADO_PAGO'
+                      ? 'Consultando...'
+                      : 'Sincronizando...'
+                    : activeIntent.provider === 'MERCADO_PAGO'
+                      ? 'Consultar pagamento'
+                      : 'Sincronizar'}
                 </button>
                 <button
                   className="primary-button pix-whatsapp-send-button"
@@ -20007,17 +20471,33 @@ function PixReceivableModal({
               <ActionMenu items={contextualActionItems} trigger="text" />
             ) : null}
             {canCreateNew ? (
-              <button
-                className="primary-button"
-                disabled={busy}
-                type="button"
-                onClick={() =>
-                  void runAction(() => createReceivablePix(receivable.id), 'PIX gerado.')
-                }
-              >
-                <QrCode aria-hidden="true" size={16} />
-                Gerar PIX
-              </button>
+              <>
+                <label className="field pix-create-provider-field">
+                  <span>Provider</span>
+                  <select
+                    disabled={busy || !eligibleReplacementProviders.length}
+                    value={selectedCreationProvider ?? ''}
+                    onChange={(event) =>
+                      setCreationProvider(event.target.value as ConfigurablePaymentProvider)
+                    }
+                  >
+                    {eligibleReplacementProviders.map((provider) => (
+                      <option key={provider} value={provider}>
+                        {replacementProviderLabel(provider, defaultReplacementProvider)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="primary-button"
+                  disabled={busy || !selectedCreationProvider}
+                  type="button"
+                  onClick={() => void createNewPix()}
+                >
+                  <QrCode aria-hidden="true" size={16} />
+                  Gerar PIX
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -20403,6 +20883,24 @@ function PixReceivableModal({
           </section>
         ) : null}
       </section>
+      {mercadoPagoEmailAction ? (
+        <MercadoPagoEmailModal
+          canSave={Boolean(receivable.client?.id)}
+          initialEmail={clientEmail ?? ''}
+          onClose={() => setMercadoPagoEmailAction(null)}
+          onConfirm={async ({ email, saveToClient }) => {
+            if (saveToClient && receivable.client) {
+              await updateClient(receivable.client.id, { email });
+              setClientEmail(email);
+            }
+
+            const action = mercadoPagoEmailAction;
+            setMercadoPagoEmailAction(null);
+            if (action === 'generate') await createNewPix(email);
+            else await runReplacementConfirm(email);
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -20437,11 +20935,11 @@ function PixReceivablesModal({
   const [paymentProviderCredentials, setPaymentProviderCredentials] = useState<
     PaymentProviderCredentialStatus[]
   >([]);
-  const [selectedProvider, setSelectedProvider] = useState<ConfigurablePaymentProvider>('FASTFLOW');
+  const [selectedProvider, setSelectedProvider] = useState<GroupedPaymentProvider>('FASTFLOW');
   const [providerSelectionSource, setProviderSelectionSource] =
     useState<PixProviderSelectionSource>('SYSTEM_DEFAULT');
   const [replacementProvider, setReplacementProvider] =
-    useState<ConfigurablePaymentProvider>('FASTFLOW');
+    useState<GroupedPaymentProvider>('FASTFLOW');
   const [showReplacement, setShowReplacement] = useState(false);
   const [whatsAppConnection, setWhatsAppConnection] = useState<WhatsAppConnection | null>(null);
   const [whatsAppSending, setWhatsAppSending] = useState(false);
@@ -20471,7 +20969,7 @@ function PixReceivablesModal({
     activeIntent?.qrCodeData?.startsWith('data:') || activeIntent?.qrCodeData?.startsWith('http');
   const eligiblePixProviders = useMemo(
     () =>
-      configurablePaymentProviders.filter((provider) => {
+      groupedPaymentProviders.filter((provider) => {
         const credential = paymentProviderCredentials.find((item) => item.provider === provider);
         return credential ? isOperationalPixProviderCredential(credential) : false;
       }),
@@ -20490,13 +20988,13 @@ function PixReceivablesModal({
     null;
   const groupedPreferredProvider =
     receivables[0]?.client?.preferredPixProvider &&
-    isConfigurablePixProvider(receivables[0].client.preferredPixProvider) &&
+    isGroupedPixProvider(receivables[0].client.preferredPixProvider) &&
     eligiblePixProviders.includes(receivables[0].client.preferredPixProvider)
       ? receivables[0].client.preferredPixProvider
       : null;
   const unavailableGroupedPreferredProvider =
     receivables[0]?.client?.preferredPixProvider &&
-    (!isConfigurablePixProvider(receivables[0].client.preferredPixProvider) ||
+    (!isGroupedPixProvider(receivables[0].client.preferredPixProvider) ||
       !eligiblePixProviders.includes(receivables[0].client.preferredPixProvider))
       ? receivables[0].client.preferredPixProvider
       : null;

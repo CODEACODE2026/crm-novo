@@ -6590,10 +6590,11 @@ function ConversationBubble({
   onOpenSharedContactClient: SharedContactAction;
 }) {
   const outbound = message.direction === 'OUTBOUND';
+  const historicalReadOnly = message.isHistorical === true;
   const reactionTriggerRef = useRef<HTMLButtonElement | null>(null);
-  const deleteEligible = isDeleteEligibleConversationMessage(message);
-  const editEligible = isEditEligibleConversationMessage(message);
-  const forwardEligible = isForwardEligibleConversationMessage(message);
+  const deleteEligible = !historicalReadOnly && isDeleteEligibleConversationMessage(message);
+  const editEligible = !historicalReadOnly && isEditEligibleConversationMessage(message);
+  const forwardEligible = !historicalReadOnly && isForwardEligibleConversationMessage(message);
 
   if (!isRenderableConversationMessage(message)) {
     return null;
@@ -6603,71 +6604,74 @@ function ConversationBubble({
     (message.type === 'IMAGE' || message.type === 'STICKER') && message.mediaAvailable;
   const hasAvailableInlineMedia = isAvailableInlineConversationMedia(message);
   const canSaveSticker =
+    !historicalReadOnly &&
     message.type === 'STICKER' &&
     message.mediaAvailable &&
     !message.deleted &&
     message.mediaMimeType?.toLowerCase() === 'image/webp';
   const text = hasAvailableInlineMedia ? '' : conversationMessageDisplayText(message);
   const caption = conversationMessageCaption(message);
-  const mobileActionItems: ActionMenuItem[] = [
-    {
-      label: 'Responder',
-      icon: Reply,
-      disabled: outboundReplyDisabled,
-      onSelect: () => onReply(message),
-    },
-    ...(canSaveSticker
-      ? [
-          {
-            label: savingSticker ? 'Salvando figurinha...' : 'Salvar figurinha',
-            icon: Download,
-            disabled: savingSticker,
-            onSelect: () => onSaveSticker(message),
-          },
-        ]
-      : []),
-    ...(forwardEligible
-      ? [
-          {
-            label: 'Encaminhar',
-            icon: ForwardIcon,
-            disabled: restrictedOutboundActionsDisabled,
-            onSelect: () => onForward(message),
-          },
-        ]
-      : []),
-    ...(editEligible
-      ? [
-          {
-            label: savingEdit ? 'Salvando edição...' : 'Editar',
-            icon: Pencil,
-            disabled: outboundActionsDisabled || savingEdit,
-            onSelect: () => onEdit(message),
-          },
-        ]
-      : []),
-    ...(!message.deleted
-      ? allowedWhatsAppReactionEmojis.map((emoji) => ({
-          label: `Reagir com ${emoji}`,
-          disabled: outboundActionsDisabled || reacting,
-          onSelect: () => onReaction(message, emoji),
-          section: 'Reagir',
-        }))
-      : []),
-    ...(deleteEligible
-      ? [
-          {
-            label: deleting ? 'Apagando...' : 'Apagar',
-            icon: Trash2,
-            danger: true,
-            disabled: outboundActionsDisabled || deleting,
-            onSelect: () => onDeleteConfirmChange(message.id),
-            section: 'Mensagem',
-          },
-        ]
-      : []),
-  ];
-  const actionRail = (
+  const mobileActionItems: ActionMenuItem[] = historicalReadOnly
+    ? []
+    : [
+        {
+          label: 'Responder',
+          icon: Reply,
+          disabled: outboundReplyDisabled,
+          onSelect: () => onReply(message),
+        },
+        ...(canSaveSticker
+          ? [
+              {
+                label: savingSticker ? 'Salvando figurinha...' : 'Salvar figurinha',
+                icon: Download,
+                disabled: savingSticker,
+                onSelect: () => onSaveSticker(message),
+              },
+            ]
+          : []),
+        ...(forwardEligible
+          ? [
+              {
+                label: 'Encaminhar',
+                icon: ForwardIcon,
+                disabled: restrictedOutboundActionsDisabled,
+                onSelect: () => onForward(message),
+              },
+            ]
+          : []),
+        ...(editEligible
+          ? [
+              {
+                label: savingEdit ? 'Salvando edição...' : 'Editar',
+                icon: Pencil,
+                disabled: outboundActionsDisabled || savingEdit,
+                onSelect: () => onEdit(message),
+              },
+            ]
+          : []),
+        ...(!message.deleted
+          ? allowedWhatsAppReactionEmojis.map((emoji) => ({
+              label: `Reagir com ${emoji}`,
+              disabled: outboundActionsDisabled || reacting,
+              onSelect: () => onReaction(message, emoji),
+              section: 'Reagir',
+            }))
+          : []),
+        ...(deleteEligible
+          ? [
+              {
+                label: deleting ? 'Apagando...' : 'Apagar',
+                icon: Trash2,
+                danger: true,
+                disabled: outboundActionsDisabled || deleting,
+                onSelect: () => onDeleteConfirmChange(message.id),
+                section: 'Mensagem',
+              },
+            ]
+          : []),
+      ];
+  const actionRail = historicalReadOnly ? null : (
     <div
       className={`conversation-message-actions ${outbound ? 'outbound' : 'inbound'}`}
       aria-label="Acoes da mensagem"
@@ -6811,6 +6815,9 @@ function ConversationBubble({
         }`}
       >
         <ConversationQuote message={message} onClick={() => onQuoteClick(message)} />
+        {historicalReadOnly ? (
+          <span className="conversation-forwarded-label">Histórico anterior · somente leitura</span>
+        ) : null}
         {message.isForwarded ? (
           <span className="conversation-forwarded-label">Encaminhada</span>
         ) : null}
@@ -6867,7 +6874,10 @@ function ConversationBubble({
           />
         ) : null}
         {!message.deleted ? (
-          <ConversationMediaContent conversationId={conversationId} message={message} />
+          <ConversationMediaContent
+            conversationId={message.conversationId ?? conversationId}
+            message={message}
+          />
         ) : null}
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         {!message.deleted ? (
@@ -6900,7 +6910,7 @@ function ConversationBubble({
           <div className="conversation-message-failure">
             <strong>Falhou ao enviar</strong>
             {retryError ? <span>{retryError}</span> : null}
-            {message.retryAction === 'RETRY' ? (
+            {!historicalReadOnly && message.retryAction === 'RETRY' ? (
               <button
                 className="conversation-message-retry"
                 disabled={restrictedOutboundActionsDisabled || retrying}
@@ -6910,10 +6920,12 @@ function ConversationBubble({
                 {retrying ? 'Tentando...' : 'Tentar novamente'}
               </button>
             ) : null}
-            {message.retryAction === 'SELECT_FILE_AGAIN' ? (
+            {!historicalReadOnly && message.retryAction === 'SELECT_FILE_AGAIN' ? (
               <span>Selecionar arquivo novamente</span>
             ) : null}
-            {message.retryAction === 'RECORD_AGAIN' ? <span>Gravar novamente</span> : null}
+            {!historicalReadOnly && message.retryAction === 'RECORD_AGAIN' ? (
+              <span>Gravar novamente</span>
+            ) : null}
           </div>
         ) : null}
       </div>

@@ -115,6 +115,25 @@ export type SendButtonsResult = {
   providerMessageId: string | null;
 };
 
+export type PixPaymentKeyType = 'PHONE' | 'EMAIL' | 'CPF' | 'CNPJ' | 'EVP';
+
+export type SendPixPaymentInput = {
+  phone: string;
+  title: string;
+  body: string;
+  pixPayment: {
+    merchantName: string;
+    key: string;
+    keyType: PixPaymentKeyType;
+    displayText: string;
+    amount: number;
+    offset: number;
+    currency: 'BRL';
+    referenceId: string;
+    itemName: string;
+  };
+};
+
 export type DownloadMediaType = 'IMAGE' | 'DOCUMENT' | 'AUDIO' | 'VIDEO' | 'STICKER';
 
 export type DownloadMediaInput = {
@@ -200,6 +219,7 @@ export interface WhatsAppProvider {
   sendVideo(instanceToken: string, input: SendVideoInput): Promise<SendVideoResult>;
   sendSticker(instanceToken: string, input: SendStickerInput): Promise<SendStickerResult>;
   sendButtons(instanceToken: string, input: SendButtonsInput): Promise<SendButtonsResult>;
+  sendPixPayment(instanceToken: string, input: SendPixPaymentInput): Promise<SendButtonsResult>;
   downloadMedia(instanceToken: string, input: DownloadMediaInput): Promise<DownloadMediaResult>;
   markMessagesAsRead(instanceToken: string, input: MarkMessagesAsReadInput): Promise<void>;
   sendReaction(instanceToken: string, input: SendReactionInput): Promise<void>;

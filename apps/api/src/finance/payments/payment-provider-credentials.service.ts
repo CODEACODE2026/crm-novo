@@ -1,18 +1,30 @@
 import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PaymentProviderCode, type PaymentProviderCredential } from '@prisma/client';
+import { createHash } from 'node:crypto';
+import {
+  PaymentProviderCode,
+  PaymentProviderEnvironment,
+  type PaymentProviderCredential,
+} from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { TokenEncryptionService } from '../../whatsapp/security/token-encryption.service';
 import {
   SavePaymentProviderCredentialDto,
+  SavePaymentProviderWhatsAppPixSettingsDto,
   SavePaymentWebhookSecretDto,
 } from '../dto/save-payment-provider-credential.dto';
 import {
   FastDepixApiClient,
   type FastDepixWebhookRegistrationResponse,
 } from './fastdepix-api.client';
+import { MercadoPagoApiClient } from './mercado-pago-api.client';
 
-const configurableProviders = ['FASTFLOW', 'FASTPIX', 'FASTPAY'] satisfies PaymentProviderCode[];
+const configurableProviders = [
+  'FASTFLOW',
+  'FASTPIX',
+  'FASTPAY',
+  'MERCADO_PAGO',
+] satisfies PaymentProviderCode[];
 const defaultPixProviders = ['FASTFLOW', 'FASTPAY'] satisfies PaymentProviderCode[];
 const supportedWebhookEvents = [
   'transaction.created',
@@ -22,53 +34,128 @@ const supportedWebhookEvents = [
   'transaction.refunded',
 ] as const;
 
+export type MercadoPagoCredentialAccess = {
+  token: string;
+  credentialId: string;
+  environment: PaymentProviderEnvironment;
+  credentialFingerprint: string;
+  accountIdHash: string;
+  proofExpiresAt: Date;
+};
+
 @Injectable()
 export class PaymentProviderCredentialsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(TokenEncryptionService) private readonly encryption: TokenEncryptionService,
     @Inject(FastDepixApiClient) private readonly apiClient: FastDepixApiClient,
+    @Inject(MercadoPagoApiClient) private readonly mercadoPagoApiClient: MercadoPagoApiClient,
     @Inject(ConfigService) private readonly config: ConfigService,
   ) {}
 
   async list() {
-    const credentials = await this.prisma.paymentProviderCredential.findMany({
-      where: { provider: { in: [...configurableProviders] } },
-      orderBy: [{ provider: 'asc' }, { active: 'desc' }, { createdAt: 'desc' }],
-    });
+    const [credentials, whatsappPixSettings] = await Promise.all([
+      this.prisma.paymentProviderCredential.findMany({
+        where: { provider: { in: [...configurableProviders] } },
+        orderBy: [{ provider: 'asc' }, { active: 'desc' }, { createdAt: 'desc' }],
+      }),
+      this.prisma.paymentProviderWhatsAppPixSettings.findMany({
+        where: { provider: { in: [...configurableProviders] } },
+      }),
+    ]);
 
     return configurableProviders.map((provider) => {
-      const credential = credentials.find((item) => item.provider === provider && item.active);
+      const environment =
+        provider === 'MERCADO_PAGO'
+          ? this.currentMercadoPagoEnvironment()
+          : PaymentProviderEnvironment.PRODUCTION;
+      const credential = credentials.find(
+        (item) =>
+          item.provider === provider &&
+          item.active &&
+          (provider !== 'MERCADO_PAGO' || item.environment === environment),
+      );
+      const whatsappPixSetting = whatsappPixSettings.find(
+        (item) => item.provider === provider && item.environment === environment,
+      );
       return credential
-        ? this.present(credential)
+        ? this.present(credential, whatsappPixSetting?.merchantName ?? null)
         : {
             provider,
+            ...(provider === 'MERCADO_PAGO' ? { environment } : {}),
+            whatsappPixMerchantName: whatsappPixSetting?.merchantName ?? null,
             configured: false,
-            status: 'NAO_CONFIGURADO',
+            status:
+              provider === 'MERCADO_PAGO' && !this.mercadoPagoEnabled()
+                ? 'DESABILITADO'
+                : 'NAO_CONFIGURADO',
           };
     });
   }
 
+  async saveWhatsAppPixSettings(
+    provider: PaymentProviderCode,
+    dto: SavePaymentProviderWhatsAppPixSettingsDto,
+    actorUserId: string,
+  ) {
+    this.ensureConfigurableProvider(provider);
+    const environment = this.resolveCredentialEnvironment(provider, dto.environment);
+    const merchantName = dto.merchantName.trim();
+    if (merchantName.length < 2 || merchantName.length > 25) {
+      throw new BadRequestException('Nome do recebedor PIX no WhatsApp invalido.');
+    }
+
+    const settings = await this.prisma.paymentProviderWhatsAppPixSettings.upsert({
+      where: { provider_environment: { provider, environment } },
+      create: { provider, environment, merchantName, updatedByUserId: actorUserId },
+      update: { merchantName, updatedByUserId: actorUserId },
+    });
+
+    return {
+      provider: settings.provider,
+      environment: settings.environment,
+      merchantName: settings.merchantName,
+      updatedAt: settings.updatedAt.toISOString(),
+    };
+  }
+
   async save(dto: SavePaymentProviderCredentialDto) {
     this.ensureConfigurableProvider(dto.provider);
+    const environment = this.resolveCredentialEnvironment(dto.provider, dto.environment);
+    this.ensureMercadoPagoProductionBlocked(dto.provider, environment);
     const trimmedToken = dto.token.trim();
-    const validation = await this.validateTokenForProvider(dto.provider, trimmedToken);
+    const validation = await this.validateTokenForProvider(dto.provider, trimmedToken, environment);
 
     await this.prisma.paymentProviderCredential.updateMany({
-      where: { provider: dto.provider, active: true, companyId: null },
+      where: { provider: dto.provider, environment, active: true, companyId: null },
       data: { active: false },
     });
 
     const credential = await this.prisma.paymentProviderCredential.create({
       data: {
         provider: dto.provider,
+        environment,
         name: dto.name.trim(),
         tokenEncrypted: this.encryption.encrypt(trimmedToken),
         tokenLastFour: trimmedToken.slice(-4),
         active: true,
         defaultForPix: this.canBeDefaultForPix(dto.provider) && !(await this.hasDefaultProvider()),
         validatedAt: new Date(),
-        lastValidationStatus: 'VALIDO',
+        lastValidationStatus:
+          validation.mercadoPagoProof?.status === 'VERIFIED_TEST'
+            ? 'VALIDO_AMBIENTE_TEST'
+            : (validation.mercadoPagoProof?.status ?? 'VALIDO'),
+        ...(validation.mercadoPagoProof
+          ? {
+              environmentProofStatus: validation.mercadoPagoProof.status,
+              environmentProofEnvironment: validation.mercadoPagoProof.environment,
+              environmentProofAccountIdHash: validation.mercadoPagoProof.accountIdHash,
+              environmentProofCredentialFingerprint:
+                validation.mercadoPagoProof.credentialFingerprint,
+              environmentProofVerifiedAt: validation.mercadoPagoProof.verifiedAt,
+              environmentProofExpiresAt: validation.mercadoPagoProof.expiresAt,
+            }
+          : {}),
         companyId: null,
       },
     });
@@ -82,13 +169,33 @@ export class PaymentProviderCredentialsService {
 
   async test(provider: PaymentProviderCode) {
     this.ensureConfigurableProvider(provider);
+    if (provider === 'MERCADO_PAGO') {
+      this.ensureMercadoPagoProductionBlocked(provider, this.currentMercadoPagoEnvironment());
+    }
     const credential = await this.getActiveCredential(provider);
     const token = this.encryption.decrypt(credential.tokenEncrypted);
-    const validation = await this.validateTokenForProvider(provider, token);
+    const validation = await this.validateTokenForProvider(provider, token, credential.environment);
 
     const updated = await this.prisma.paymentProviderCredential.update({
       where: { id: credential.id },
-      data: { validatedAt: new Date(), lastValidationStatus: 'VALIDO' },
+      data: {
+        validatedAt: new Date(),
+        lastValidationStatus:
+          validation.mercadoPagoProof?.status === 'VERIFIED_TEST'
+            ? 'VALIDO_AMBIENTE_TEST'
+            : (validation.mercadoPagoProof?.status ?? 'VALIDO'),
+        ...(validation.mercadoPagoProof
+          ? {
+              environmentProofStatus: validation.mercadoPagoProof.status,
+              environmentProofEnvironment: validation.mercadoPagoProof.environment,
+              environmentProofAccountIdHash: validation.mercadoPagoProof.accountIdHash,
+              environmentProofCredentialFingerprint:
+                validation.mercadoPagoProof.credentialFingerprint,
+              environmentProofVerifiedAt: validation.mercadoPagoProof.verifiedAt,
+              environmentProofExpiresAt: validation.mercadoPagoProof.expiresAt,
+            }
+          : {}),
+      },
     });
 
     return {
@@ -103,7 +210,15 @@ export class PaymentProviderCredentialsService {
     const credential = await this.getActiveCredential(provider);
     const updated = await this.prisma.paymentProviderCredential.update({
       where: { id: credential.id },
-      data: { active: false, defaultForPix: false, lastValidationStatus: 'DESATIVADO' },
+      data: {
+        active: false,
+        defaultForPix: false,
+        lastValidationStatus: 'DESATIVADO',
+        environmentProofStatus:
+          provider === 'MERCADO_PAGO' ? 'INVALIDATED' : credential.environmentProofStatus,
+        environmentProofExpiresAt:
+          provider === 'MERCADO_PAGO' ? new Date() : credential.environmentProofExpiresAt,
+      },
     });
 
     return this.present(updated);
@@ -146,6 +261,7 @@ export class PaymentProviderCredentialsService {
 
   async registerWebhook(provider: PaymentProviderCode) {
     this.ensureConfigurableProvider(provider);
+    this.ensureAutomaticWebhookRegistrationProvider(provider);
     const credential = await this.getActiveCredential(provider);
     const publicUrl = this.getPublicWebhookUrl(provider);
     const token = this.encryption.decrypt(credential.tokenEncrypted);
@@ -172,7 +288,14 @@ export class PaymentProviderCredentialsService {
 
   async getActiveToken(provider: PaymentProviderCode) {
     const credential = await this.prisma.paymentProviderCredential.findFirst({
-      where: { provider, active: true, companyId: null },
+      where: {
+        provider,
+        active: true,
+        companyId: null,
+        ...(provider === 'MERCADO_PAGO'
+          ? { environment: this.currentMercadoPagoEnvironment() }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -181,6 +304,37 @@ export class PaymentProviderCredentialsService {
     }
 
     return this.encryption.decrypt(credential.tokenEncrypted);
+  }
+
+  async getActiveMercadoPagoAccess(): Promise<MercadoPagoCredentialAccess> {
+    const credential = await this.getActiveCredential('MERCADO_PAGO');
+    const token = this.encryption.decrypt(credential.tokenEncrypted);
+    const fingerprint = this.hashProofValue(`credential:${token}`);
+    const now = new Date();
+
+    if (
+      credential.environment !== 'TEST' ||
+      this.currentMercadoPagoEnvironment() !== 'TEST' ||
+      credential.environmentProofStatus !== 'VERIFIED_TEST' ||
+      credential.environmentProofEnvironment !== 'TEST' ||
+      !credential.environmentProofAccountIdHash ||
+      !credential.environmentProofCredentialFingerprint ||
+      credential.environmentProofCredentialFingerprint !== fingerprint ||
+      !credential.environmentProofVerifiedAt ||
+      !credential.environmentProofExpiresAt ||
+      credential.environmentProofExpiresAt <= now
+    ) {
+      throw new BadRequestException('Credencial Mercado Pago sem prova TEST valida e vigente.');
+    }
+
+    return {
+      token,
+      credentialId: credential.id,
+      environment: credential.environment,
+      credentialFingerprint: fingerprint,
+      accountIdHash: credential.environmentProofAccountIdHash,
+      proofExpiresAt: credential.environmentProofExpiresAt,
+    };
   }
 
   async getDefaultProvider() {
@@ -199,6 +353,12 @@ export class PaymentProviderCredentialsService {
 
   async ensureEligiblePixCreationProvider(provider: PaymentProviderCode) {
     this.ensureConfigurableProvider(provider);
+    if (provider === 'MERCADO_PAGO') {
+      this.ensureMercadoPagoProductionBlocked(provider, this.currentMercadoPagoEnvironment());
+    }
+    if (provider === 'MERCADO_PAGO' && !this.mercadoPagoEnabled()) {
+      throw new BadRequestException('Mercado Pago esta desabilitado neste ambiente.');
+    }
     await this.getActiveCredential(provider);
   }
 
@@ -215,7 +375,14 @@ export class PaymentProviderCredentialsService {
 
   private async getActiveCredential(provider: PaymentProviderCode) {
     const credential = await this.prisma.paymentProviderCredential.findFirst({
-      where: { provider, active: true, companyId: null },
+      where: {
+        provider,
+        active: true,
+        companyId: null,
+        ...(provider === 'MERCADO_PAGO'
+          ? { environment: this.currentMercadoPagoEnvironment() }
+          : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
 
@@ -239,7 +406,31 @@ export class PaymentProviderCredentialsService {
     return count > 0;
   }
 
-  private async validateTokenForProvider(provider: PaymentProviderCode, token: string) {
+  private async validateTokenForProvider(
+    provider: PaymentProviderCode,
+    token: string,
+    environment: PaymentProviderEnvironment = 'PRODUCTION',
+  ) {
+    if (provider === 'MERCADO_PAGO') {
+      const user = await this.mercadoPagoApiClient.getCurrentUser(token);
+      const id = user.id === undefined || user.id === null ? '' : String(user.id).trim();
+
+      if (!id) {
+        throw new BadRequestException('Mercado Pago nao confirmou a conta da credencial.');
+      }
+
+      const mercadoPagoProof = this.buildMercadoPagoEnvironmentProof(user, token, environment);
+
+      return {
+        provider_label: 'Mercado Pago',
+        parceiro: {
+          id,
+          name: user.nickname?.trim() || 'Conta Mercado Pago',
+        },
+        mercadoPagoProof,
+      };
+    }
+
     const validation = await this.apiClient.authMe(token);
     const realProvider = validation.api_provider?.toLowerCase();
     const expected = provider.toLowerCase();
@@ -251,7 +442,65 @@ export class PaymentProviderCredentialsService {
       );
     }
 
-    return validation;
+    return { ...validation, mercadoPagoProof: null };
+  }
+
+  private buildMercadoPagoEnvironmentProof(
+    user: Awaited<ReturnType<MercadoPagoApiClient['getCurrentUser']>>,
+    token: string,
+    environment: PaymentProviderEnvironment,
+  ) {
+    const id = user.id === undefined || user.id === null ? '' : String(user.id).trim();
+    const verifiedAt = new Date();
+
+    if (environment !== 'TEST') {
+      return {
+        status: 'PRODUCTION_NOT_HOMOLOGATED',
+        environment,
+        accountIdHash: id ? this.hashProofValue(`account:${id}`) : null,
+        credentialFingerprint: this.hashProofValue(`credential:${token}`),
+        verifiedAt,
+        expiresAt: null,
+      };
+    }
+
+    const tags = Array.isArray(user.tags)
+      ? user.tags.filter((value): value is string => typeof value === 'string')
+      : [];
+    const signals = [
+      typeof user.nickname === 'string' && /^test/i.test(user.nickname.trim()),
+      typeof user.email === 'string' && /@testuser\.com$/i.test(user.email.trim()),
+      tags.some((tag) => tag.toLowerCase() === 'test_user' || tag.toLowerCase().includes('test')),
+      user.test_data !== undefined && user.test_data !== null,
+    ].filter(Boolean).length;
+
+    if (user.site_id !== 'MLB' || signals < 2) {
+      throw new BadRequestException(
+        'Mercado Pago nao comprovou identidade oficial de vendedor TEST.',
+      );
+    }
+
+    return {
+      status: 'VERIFIED_TEST',
+      environment: 'TEST' as const,
+      accountIdHash: this.hashProofValue(`account:${id}`),
+      credentialFingerprint: this.hashProofValue(`credential:${token}`),
+      verifiedAt,
+      expiresAt: new Date(verifiedAt.getTime() + this.environmentProofTtlMs()),
+    };
+  }
+
+  private environmentProofTtlMs() {
+    const configured = Number(
+      this.config.get<string>('MERCADO_PAGO_ENVIRONMENT_PROOF_TTL_MINUTES') ?? '1440',
+    );
+    const minutes =
+      Number.isFinite(configured) && configured >= 5 && configured <= 10_080 ? configured : 1440;
+    return minutes * 60_000;
+  }
+
+  private hashProofValue(value: string) {
+    return `sha256:${createHash('sha256').update(value).digest('hex')}`;
   }
 
   private ensureConfigurableProvider(provider: PaymentProviderCode) {
@@ -260,9 +509,24 @@ export class PaymentProviderCredentialsService {
     }
   }
 
+  private ensureMercadoPagoProductionBlocked(
+    provider: PaymentProviderCode,
+    environment: PaymentProviderEnvironment,
+  ) {
+    if (provider === 'MERCADO_PAGO' && environment === 'PRODUCTION') {
+      throw new BadRequestException(
+        'Mercado Pago PRODUCTION permanece bloqueado ate homologacao separada.',
+      );
+    }
+  }
+
   private ensureDefaultPixProvider(provider: PaymentProviderCode) {
     if (!this.canBeDefaultForPix(provider)) {
-      throw new BadRequestException('FastPIX e um provider alternativo manual nesta versao.');
+      throw new BadRequestException(
+        provider === 'FASTPIX'
+          ? 'FastPIX e um provider alternativo manual nesta versao.'
+          : 'Provider disponivel apenas para selecao manual nesta versao.',
+      );
     }
   }
 
@@ -275,6 +539,7 @@ export class PaymentProviderCredentialsService {
     if (provider === 'fastpix') return 'FastPIX';
     if (provider === 'fastpay') return 'FastPay';
     if (provider === 'depix') return 'Depix';
+    if (provider === 'mercado_pago') return 'Mercado Pago';
     return provider || 'provider desconhecido';
   }
 
@@ -352,9 +617,15 @@ export class PaymentProviderCredentialsService {
     }
   }
 
-  private present(credential: PaymentProviderCredential) {
+  private present(
+    credential: PaymentProviderCredential,
+    whatsappPixMerchantName: string | null = null,
+  ) {
     const status = credential.active
-      ? credential.lastValidationStatus === 'VALIDO'
+      ? credential.lastValidationStatus === 'VALIDO' ||
+        (credential.environmentProofStatus === 'VERIFIED_TEST' &&
+          credential.environmentProofExpiresAt !== null &&
+          credential.environmentProofExpiresAt > new Date())
         ? 'VALIDO'
         : 'CONFIGURADO'
       : 'NAO_CONFIGURADO';
@@ -362,10 +633,15 @@ export class PaymentProviderCredentialsService {
     return {
       id: credential.id,
       provider: credential.provider,
+      environment: credential.environment,
       name: credential.name,
+      whatsappPixMerchantName,
       configured: credential.active,
       active: credential.active,
-      tokenMask: `fdpx_************${credential.tokenLastFour}`,
+      tokenMask:
+        credential.provider === 'MERCADO_PAGO'
+          ? `mp_************${credential.tokenLastFour}`
+          : `fdpx_************${credential.tokenLastFour}`,
       webhookSecretConfigured: Boolean(credential.webhookSecretEncrypted),
       webhookSecretMask: credential.webhookSecretLastFour
         ? `whsec_************${credential.webhookSecretLastFour}`
@@ -376,9 +652,47 @@ export class PaymentProviderCredentialsService {
       defaultForPix: credential.defaultForPix,
       validatedAt: credential.validatedAt?.toISOString() ?? null,
       lastValidationStatus: credential.lastValidationStatus,
+      environmentProofStatus: credential.environmentProofStatus,
+      environmentProofVerifiedAt: credential.environmentProofVerifiedAt?.toISOString() ?? null,
+      environmentProofExpiresAt: credential.environmentProofExpiresAt?.toISOString() ?? null,
       status,
       createdAt: credential.createdAt.toISOString(),
       updatedAt: credential.updatedAt.toISOString(),
     };
+  }
+
+  private resolveCredentialEnvironment(
+    provider: PaymentProviderCode,
+    environment: PaymentProviderEnvironment | undefined,
+  ) {
+    if (provider === 'MERCADO_PAGO') {
+      return environment ?? this.currentMercadoPagoEnvironment();
+    }
+
+    if (environment && environment !== 'PRODUCTION') {
+      throw new BadRequestException(
+        'Ambiente separado de credencial e suportado apenas para Mercado Pago nesta versao.',
+      );
+    }
+
+    return 'PRODUCTION' as const;
+  }
+
+  private currentMercadoPagoEnvironment(): PaymentProviderEnvironment {
+    return this.config.get<string>('MERCADO_PAGO_ENVIRONMENT') === 'PRODUCTION'
+      ? 'PRODUCTION'
+      : 'TEST';
+  }
+
+  private mercadoPagoEnabled() {
+    return this.config.get<string>('MERCADO_PAGO_ENABLED') === 'true';
+  }
+
+  private ensureAutomaticWebhookRegistrationProvider(provider: PaymentProviderCode) {
+    if (provider === 'MERCADO_PAGO') {
+      throw new BadRequestException(
+        'Webhook Mercado Pago deve ser configurado no painel oficial nesta fase.',
+      );
+    }
   }
 }

@@ -229,6 +229,60 @@ describe('validateEnv', () => {
     expect(validateEnv(env)).toBe(env);
   });
 
+  it('accepts explicit fail-closed Mercado Pago test configuration', () => {
+    expect(
+      validateEnv({
+        MERCADO_PAGO_ENABLED: 'false',
+        MERCADO_PAGO_ENVIRONMENT: 'TEST',
+        MERCADO_PAGO_HTTP_TIMEOUT_MS: '8000',
+        MERCADO_PAGO_WEBHOOK_MAX_AGE_MS: '86400000',
+        MERCADO_PAGO_WEBHOOK_FUTURE_TOLERANCE_MS: '300000',
+        MERCADO_PAGO_WEBHOOK_LEASE_MS: '120000',
+      }),
+    ).toMatchObject({
+      MERCADO_PAGO_ENABLED: 'false',
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+    });
+  });
+
+  it.each([
+    'MERCADO_PAGO_WEBHOOK_MAX_AGE_MS',
+    'MERCADO_PAGO_WEBHOOK_FUTURE_TOLERANCE_MS',
+    'MERCADO_PAGO_WEBHOOK_LEASE_MS',
+  ])('rejects an invalid %s', (key) => {
+    expect(() => validateEnv({ [key]: '999' })).toThrow(`${key} deve ser inteiro`);
+    expect(() => validateEnv({ [key]: 'not-a-number' })).toThrow(`${key} deve ser inteiro`);
+  });
+
+  it('requires an explicit environment when Mercado Pago is enabled', () => {
+    expect(() => validateEnv({ MERCADO_PAGO_ENABLED: 'true' })).toThrow(
+      'MERCADO_PAGO_ENVIRONMENT e obrigatorio',
+    );
+  });
+
+  it.each(['sandbox', 'prod', ''])('rejects invalid Mercado Pago environment %j', (value) => {
+    expect(() => validateEnv({ MERCADO_PAGO_ENVIRONMENT: value })).toThrow();
+  });
+
+  it('allows the official APRO simulator only with an explicit TEST environment', () => {
+    expect(
+      validateEnv({
+        MERCADO_PAGO_ENVIRONMENT: 'TEST',
+        MERCADO_PAGO_SANDBOX_APRO_ENABLED: 'true',
+      }),
+    ).toMatchObject({
+      MERCADO_PAGO_ENVIRONMENT: 'TEST',
+      MERCADO_PAGO_SANDBOX_APRO_ENABLED: 'true',
+    });
+
+    expect(() =>
+      validateEnv({
+        MERCADO_PAGO_ENVIRONMENT: 'PRODUCTION',
+        MERCADO_PAGO_SANDBOX_APRO_ENABLED: 'true',
+      }),
+    ).toThrow('MERCADO_PAGO_SANDBOX_APRO_ENABLED exige MERCADO_PAGO_ENVIRONMENT=TEST.');
+  });
+
   it.each([
     [
       'billing true / recovery false',

@@ -10,13 +10,60 @@ describe('Kirago clients', () => {
       { request } as never,
     );
 
-    await client.createUser({ name: 'CRM', token: 'instance-token', events: ['Message'] });
+    await client.createUser({ name: 'CRM', token: 'instance-token', events: 'Message' });
 
     expect(request).toHaveBeenCalledWith('/admin/users', {
       method: 'POST',
       headers: { Authorization: 'Bearer admin-token' },
-      body: { name: 'CRM', token: 'instance-token', events: ['Message'] },
+      body: { name: 'CRM', token: 'instance-token', events: 'Message' },
       authFailureCode: 'KIRAGO_ADMIN_AUTH_FAILED',
+    });
+  });
+
+  it('uses the isolated legacy PixPayment contract without changing ordinary buttons', async () => {
+    const request = vi.fn().mockResolvedValue({ success: true, code: 200, data: { Id: 'pix' } });
+    const client = new KiragoInstanceClient({ request } as never);
+    const pixPayload = {
+      Phone: '5544999999999',
+      Title: 'PIX',
+      Body: 'Mensagem original',
+      Buttons: [
+        {
+          PixPayment: {
+            MerchantName: 'ATIVO CHEK OUT',
+            Key: 'BR-CODE-ORIGINAL',
+            KeyType: 'EVP',
+            DisplayText: 'Copiar Chave PIX',
+            Amount: 10000,
+            Offset: 100,
+            Currency: 'BRL',
+            ReferenceId: 'intent-id',
+            ItemName: 'Pagamento CRM NOVO',
+          },
+        },
+      ],
+    };
+
+    await client.sendPixPayment('instance-token', pixPayload);
+    const ordinaryPayload = {
+      phone: '5544999999999',
+      title: 'Outro',
+      body: 'Outro botao',
+      buttons: [{ name: 'cta_url', buttonParamsJson: { url: 'https://example.test' } }],
+    };
+    await client.sendButtons('instance-token', ordinaryPayload);
+
+    expect(request).toHaveBeenNthCalledWith(1, '/chat/send/buttons', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer instance-token' },
+      body: pixPayload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+    expect(request).toHaveBeenNthCalledWith(2, '/chat/send/buttons', {
+      method: 'POST',
+      headers: { token: 'instance-token' },
+      body: ordinaryPayload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });
   });
 
@@ -448,7 +495,7 @@ describe('Kirago clients', () => {
     });
   });
 
-  it('sends PIX buttons with the instance bearer token, not the admin token', async () => {
+  it('sends PIX buttons with the normal instance token header', async () => {
     const request = vi.fn().mockResolvedValue({ success: true, data: { Id: 'message-id' } });
     const client = new KiragoInstanceClient({ request } as never);
 
@@ -469,7 +516,7 @@ describe('Kirago clients', () => {
 
     expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
       method: 'POST',
-      headers: { Authorization: 'Bearer instance-token' },
+      headers: { token: 'instance-token' },
       body: {
         phone: '5544999999999',
         title: 'PIX',
@@ -514,7 +561,7 @@ describe('Kirago clients', () => {
 
       expect(request).toHaveBeenCalledWith('/chat/send/buttons', {
         method: 'POST',
-        headers: { Authorization: 'Bearer instance-token' },
+        headers: { token: 'instance-token' },
         body: {
           phone,
           title: 'PIX',

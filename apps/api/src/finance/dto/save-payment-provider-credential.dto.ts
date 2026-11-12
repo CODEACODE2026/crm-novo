@@ -1,9 +1,13 @@
-import { PaymentProviderCode } from '@prisma/client';
-import { IsEnum, IsString, MaxLength, MinLength } from 'class-validator';
+import { PaymentProviderCode, PaymentProviderEnvironment } from '@prisma/client';
+import { IsEnum, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 
 export class SavePaymentProviderCredentialDto {
   @IsEnum(PaymentProviderCode)
   provider!: PaymentProviderCode;
+
+  @IsOptional()
+  @IsEnum(PaymentProviderEnvironment)
+  environment?: PaymentProviderEnvironment;
 
   @IsString()
   @MinLength(2)
@@ -21,4 +25,15 @@ export class SavePaymentWebhookSecretDto {
   @MinLength(16)
   @MaxLength(512)
   secret!: string;
+}
+
+export class SavePaymentProviderWhatsAppPixSettingsDto {
+  @IsOptional()
+  @IsEnum(PaymentProviderEnvironment)
+  environment?: PaymentProviderEnvironment;
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(25)
+  merchantName!: string;
 }

@@ -473,6 +473,22 @@ describe('CRM UI formatters', () => {
     expect(latestJsonBody(fetchMock)).toEqual({ provider: 'FASTPAY' });
   });
 
+  it('posts transient payer email only for the requested individual PIX', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: 'intent-1', provider: 'MERCADO_PAGO' }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createReceivablePix('receivable-1', 'MERCADO_PAGO', 'cliente@example.com');
+
+    expect(latestJsonBody(fetchMock)).toEqual({
+      provider: 'MERCADO_PAGO',
+      payerEmail: 'cliente@example.com',
+    });
+  });
+
   it('posts selected provider when creating grouped PIX', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ id: 'intent-1', provider: 'FASTPAY' }), {

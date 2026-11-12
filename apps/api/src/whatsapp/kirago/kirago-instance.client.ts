@@ -305,9 +305,36 @@ export class KiragoInstanceClient {
   ) {
     return this.http.request<KiragoEnvelope<KiragoSendButtonsData>>('/chat/send/buttons', {
       method: 'POST',
-      headers: {
-        Authorization: this.instanceBearer(instanceToken),
-      },
+      headers: { token: instanceToken },
+      body: payload,
+      authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
+    });
+  }
+
+  sendPixPayment(
+    instanceToken: string,
+    payload: {
+      Phone: string;
+      Title: string;
+      Body: string;
+      Buttons: Array<{
+        PixPayment: {
+          MerchantName: string;
+          Key: string;
+          KeyType: string;
+          DisplayText: string;
+          Amount: number;
+          Offset: number;
+          Currency: string;
+          ReferenceId: string;
+          ItemName: string;
+        };
+      }>;
+    },
+  ) {
+    return this.http.request<KiragoEnvelope<KiragoSendButtonsData>>('/chat/send/buttons', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${instanceToken}` },
       body: payload,
       authFailureCode: 'KIRAGO_INSTANCE_AUTH_FAILED',
     });

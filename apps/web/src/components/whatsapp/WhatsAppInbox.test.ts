@@ -121,6 +121,29 @@ const referenceLifecycleModalsSource = readFileSync(
 );
 const globalStylesSource = readFileSync(join(currentDir, '../../app/globals.css'), 'utf8');
 
+describe('WhatsApp history continuity read-only UI', () => {
+  it('marks historical messages and removes every mutable action while preserving source media', () => {
+    expect(whatsAppInboxSource).toContain(
+      'const historicalReadOnly = message.isHistorical === true;',
+    );
+    expect(whatsAppInboxSource).toContain('Histórico anterior · somente leitura');
+    expect(whatsAppInboxSource).toContain('const actionRail = historicalReadOnly ? null');
+    expect(whatsAppInboxSource).toContain(
+      'const mobileActionItems: ActionMenuItem[] = historicalReadOnly',
+    );
+    expect(whatsAppInboxSource).toContain(
+      'conversationId={message.conversationId ?? conversationId}',
+    );
+    expect(whatsAppInboxSource).toContain("!historicalReadOnly && message.retryAction === 'RETRY'");
+    expect(whatsAppInboxSource).toContain(
+      "!historicalReadOnly && message.retryAction === 'SELECT_FILE_AGAIN'",
+    );
+    expect(whatsAppInboxSource).toContain(
+      "!historicalReadOnly && message.retryAction === 'RECORD_AGAIN'",
+    );
+  });
+});
+
 describe('international manual text capability', () => {
   it('identifies international conversations from canonical persisted identity', () => {
     expect(

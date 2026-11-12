@@ -6,6 +6,7 @@ import {
   FastPixPaymentProvider,
 } from './fastdepix-payment.provider';
 import { MockPaymentProvider } from './mock-payment.provider';
+import { MercadoPagoPaymentProvider } from './mercado-pago-payment.provider';
 import { PaymentProviderCredentialsService } from './payment-provider-credentials.service';
 import type {
   CreatePixInput,
@@ -24,6 +25,8 @@ export class PaymentProviderRegistryService implements PaymentProvider {
     @Inject(FastPayPaymentProvider) private readonly fastPay: FastPayPaymentProvider,
     @Inject(PaymentProviderCredentialsService)
     private readonly credentials: PaymentProviderCredentialsService,
+    @Inject(MercadoPagoPaymentProvider)
+    private readonly mercadoPago: MercadoPagoPaymentProvider,
   ) {}
 
   async createPix(input: CreatePixInput): Promise<PaymentProviderPix> {
@@ -89,10 +92,11 @@ export class PaymentProviderRegistryService implements PaymentProvider {
     return this.mock;
   }
 
-  private byCode(provider: PaymentProviderCode) {
+  private byCode(provider: PaymentProviderCode): PaymentProvider {
     if (provider === 'FASTFLOW') return this.fastFlow;
     if (provider === 'FASTPIX') return this.fastPix;
     if (provider === 'FASTPAY') return this.fastPay;
+    if (provider === 'MERCADO_PAGO') return this.mercadoPago;
     return this.mock;
   }
 }

@@ -261,6 +261,7 @@ function serviceFactory({
   clientReferencesForSummary = [],
   failSentUpdate = false,
   pixIntent = { status: 'WAITING_PAYMENT', pixCopyPaste: '000201-stage-c-pix' },
+  preparedSuccessorGuard,
 }: {
   clients?: Array<ReturnType<typeof client>>;
   dispatchForProcessing?: ReturnType<typeof dispatch>;
@@ -278,6 +279,7 @@ function serviceFactory({
   clientReferencesForSummary?: Array<Record<string, unknown>>;
   failSentUpdate?: boolean;
   pixIntent?: { status: string; pixCopyPaste: string | null };
+  preparedSuccessorGuard?: { assertAutomatedOutboundAllowed: ReturnType<typeof vi.fn> };
 } = {}) {
   let storedDispatch = dispatchForProcessing;
   const clientEventCreate = vi.fn().mockResolvedValue({});
@@ -490,12 +492,16 @@ function serviceFactory({
     createReceivablePixForAutomatedBilling: vi.fn().mockResolvedValue(pixIntent),
     createReceivablesPixForAutomatedBilling: vi.fn().mockResolvedValue(pixIntent),
   };
+  const effectivePreparedSuccessorGuard = preparedSuccessorGuard ?? {
+    assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined),
+  };
   const service = new BillingService(
     prisma as never,
     provider as never,
     encryption as never,
     config as never,
     new BillingTemplateRenderer(),
+    effectivePreparedSuccessorGuard as never,
     undefined,
     finance as never,
   );
@@ -2349,6 +2355,19 @@ describe('BillingService', () => {
       expect.objectContaining({ take: 1 }),
     );
     expect(providerSendText).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks billing provider calls when the destination successor is PREPARED', async () => {
+    const providerSendText = vi.fn();
+    const preparedSuccessorGuard = {
+      assertAutomatedOutboundAllowed: vi.fn().mockRejectedValue(new Error('prepared successor')),
+    };
+    const { service } = serviceFactory({ providerSendText, preparedSuccessorGuard });
+
+    await service.processDue(new Date('2026-09-15T12:30:00.000Z'), 20, { automatic: true });
+
+    expect(preparedSuccessorGuard.assertAutomatedOutboundAllowed).toHaveBeenCalledTimes(1);
+    expect(providerSendText).not.toHaveBeenCalled();
   });
 
   it('processes only one failed retry per tick when retries become due together', async () => {

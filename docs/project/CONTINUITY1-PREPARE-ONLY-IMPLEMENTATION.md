@@ -41,6 +41,21 @@ confirmação, qualquer envio direto à sucessora `PREPARED` é bloqueado antes 
 O vínculo e `ACTIVATED` somente são persistidos depois da confirmação do provider.
 Falha ou resultado incerto mantém `PREPARED` sem vínculo.
 
+No CRM, a predecessora `PREPARED` exibe um aviso persistente e exige confirmação
+explícita do operador antes do primeiro texto. Anexo, resposta, figurinha, mídia e ação
+sobre mensagem permanecem bloqueados nesse primeiro envio. A interface informa que a
+sucessora só será ativada depois da confirmação do WhatsApp.
+
+### Gate de automações outbound
+
+Billing, Recovery, PIX/ativação inicial e o envio administrativo legado consultam um
+guard central imediatamente antes do provider. Se o destino corresponder a uma sucessora
+`PREPARED`, o provider não é chamado e o fluxo recebe
+`WHATSAPP_PREPARED_SUCCESSOR_AUTOMATION_BLOCKED`. O prepare-only também recusa o lote se
+já existir dispatch `PENDING`, `SCHEDULED` ou `PROCESSING` para o mesmo destino. Assim,
+uma automação iniciada antes do prepare bloqueia a preparação, e uma preparação já
+confirmada bloqueia a automação antes do envio.
+
 ## Estados
 
 - `PREPARED`: sucessora vazia e oculta das filas; predecessora continua visível;
@@ -58,6 +73,7 @@ Falha ou resultado incerto mantém `PREPARED` sem vínculo.
 - cliente obrigatório e identidade telefônica compatível;
 - nenhuma assistência ativa na predecessora;
 - nenhuma sucessora física ou vínculo concorrente;
+- nenhum dispatch outbound ativo para o mesmo destino na conexão sucessora;
 - sucessora criada sem `lastMessageAt`, preview, unread, mensagens ou atendimentos;
 - mensagens e atendimentos históricos permanecem na predecessora;
 - nenhuma chamada de provider no prepare-only.
@@ -71,15 +87,18 @@ outbound, a ativação ocorre somente após confirmação do provider.
 
 ## Plano de piloto (não autorizado para produção)
 
-1. aplicar a migration aditiva em janela separada e validar o catálogo;
-2. executar dry-run dos mesmos 5 IDs do piloto;
-3. exigir cinco `ELIGIBLE` ou `ALREADY_PREPARED`, sem categoria manual/conflito;
-4. aplicar lote atômico de 5;
-5. validar zero mensagens, atendimentos e vínculos; predecessoras visíveis e sucessoras
+1. obter backup e preflight produtivo explicitamente autorizados;
+2. aplicar a migration aditiva e implantar a API, sem preparar conversa alguma;
+3. validar catálogo, health, filas existentes e ausência de registros de preparação;
+4. publicar o frontend compatível, ainda sem preparar conversa alguma;
+5. executar somente o dry-run dos mesmos 5 IDs do piloto;
+6. exigir cinco `ELIGIBLE` ou `ALREADY_PREPARED`, sem categoria manual/conflito;
+7. mediante autorização separada, aplicar lote atômico de 5;
+8. validar zero mensagens, atendimentos e vínculos; predecessoras visíveis e sucessoras
    ausentes das filas;
-6. observar ativações reais, sem gerar mensagem de teste;
-7. somente após aprovação, repetir com 10 IDs;
-8. somente após nova aprovação, usar lotes de até 25, parando no primeiro conflito.
+9. observar ativações reais, sem gerar mensagem de teste;
+10. somente após aprovação, repetir com 10 IDs;
+11. somente após nova aprovação, usar lotes de até 25, parando no primeiro conflito.
 
 ## Rollback
 
@@ -90,10 +109,10 @@ outbound, a ativação ocorre somente após confirmação do provider.
 
 ## Riscos residuais
 
-- a UI ainda precisa expor a confirmação explícita de continuidade para outbound;
-- fluxos outbound automatizados que não passam pela rota manual confirmada permanecem fora
-  da ativação PREPARE-ONLY; o piloto deve excluir contatos com automações ativas até um gate
-  específico ser aprovado, sem alterar PAYMENT2 neste escopo;
+- o bloqueio de automações é proposital e pode gerar dispatch falho/reagendado, conforme o
+  contrato preexistente de Billing/Recovery; o piloto deve monitorar essas filas;
+- uma automação completamente externa ao CRM não pode ser coordenada por este banco e deve
+  permanecer fora do piloto;
 - `FAILED` exige triagem administrativa antes de qualquer nova preparação;
 - deploy requer migration aditiva e compatibilidade coordenada entre API e web;
 - nenhuma contagem global fixa deve ser usada como gate: validar IDs e estados exatos;

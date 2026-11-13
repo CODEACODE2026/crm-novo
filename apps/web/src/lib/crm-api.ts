@@ -916,6 +916,12 @@ export interface WhatsAppConversation {
   lastAutoReplyAt: string | null;
   labels: WhatsAppConversationLabel[];
   activeAttendance?: WhatsAppAttendanceSummary | null;
+  continuityPreparation?: {
+    id: string;
+    status: 'PREPARED' | 'ACTIVATED' | 'CANCELLED' | 'FAILED';
+    targetConnectionId: string;
+    successorConversationId: string | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -3399,7 +3405,12 @@ export function createWhatsAppRealtimeEventSource() {
 
 export function sendWhatsAppConversationMessage(
   id: string,
-  payload: { body: string; requestId: string; replyToMessageId?: string },
+  payload: {
+    body: string;
+    requestId: string;
+    replyToMessageId?: string;
+    continueOnPreparedSuccessor?: boolean;
+  },
 ) {
   return apiFetch<WhatsAppConversationMessage>(`/whatsapp/conversations/${id}/messages`, {
     method: 'POST',

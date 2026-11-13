@@ -258,6 +258,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
       {} as never,
       {} as never,
       {} as never,
+      { assertAutomatedOutboundAllowed: () => Promise.resolve(undefined) } as never,
       new ReceivableCycleService(prisma as never),
     );
 
@@ -511,6 +512,7 @@ describe.skipIf(!runDatabaseTests)('client international phone writes', () => {
       {} as never,
       {} as never,
       {} as never,
+      { assertAutomatedOutboundAllowed: () => Promise.resolve(undefined) } as never,
       new ReceivableCycleService(prisma as never),
     );
 

@@ -5,7 +5,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-return */
 /* eslint-disable @typescript-eslint/require-await */
 /* eslint-disable @typescript-eslint/no-base-to-string */
-/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
 import { randomUUID } from 'node:crypto';
 
 import { Prisma, PrismaClient } from '@prisma/client';
@@ -97,6 +96,7 @@ function createService(
     receivables?: Array<ReturnType<typeof receivable>>;
     provider?: { sendText: ReturnType<typeof vi.fn> };
     settings?: Partial<Record<string, unknown>>;
+    preparedSuccessorGuard?: { assertAutomatedOutboundAllowed: ReturnType<typeof vi.fn> };
   } = {},
 ) {
   const templates: Array<Record<string, unknown>> = [
@@ -487,12 +487,16 @@ function createService(
   const provider = input.provider ?? {
     sendText: vi.fn().mockResolvedValue({ providerMessageId: 'msg-1' }),
   };
+  const preparedSuccessorGuard = input.preparedSuccessorGuard ?? {
+    assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined),
+  };
   const service = new RecoveryService(
     tx as never,
     provider as never,
     { decrypt: vi.fn(() => 'instance-token') } as never,
     { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
     new BillingTemplateRenderer(),
+    preparedSuccessorGuard as never,
   );
 
   return {
@@ -938,6 +942,26 @@ describe('RecoveryService', () => {
     vi.useRealTimers();
   });
 
+  it('blocks recovery provider calls when the destination successor is PREPARED', async () => {
+    vi.setSystemTime(new Date('2026-09-20T12:00:00.000Z'));
+    const provider = { sendText: vi.fn() };
+    const preparedSuccessorGuard = {
+      assertAutomatedOutboundAllowed: vi.fn().mockRejectedValue(new Error('prepared successor')),
+    };
+    const { service } = createService({
+      provider,
+      preparedSuccessorGuard,
+      settings: { enabled: true },
+    });
+    await service.reconcile();
+
+    await service.processDue(new Date('2026-09-20T12:00:00.000Z'), 20, { automatic: true });
+
+    expect(preparedSuccessorGuard.assertAutomatedOutboundAllowed).toHaveBeenCalledTimes(1);
+    expect(provider.sendText).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it.each([
     ['timeout after remote acceptance', 'KIRAGO_TIMEOUT'],
     ['socket reset after remote acceptance', 'KIRAGO_UNAVAILABLE'],
@@ -976,6 +1000,7 @@ describe('RecoveryService', () => {
       { decrypt: vi.fn(() => 'instance-token') } as never,
       { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
       new BillingTemplateRenderer(),
+      { assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined) } as never,
     );
     await Promise.all([
       restartedService.processDue(new Date('2026-09-21T12:00:00.000Z'), 20, {
@@ -1151,6 +1176,7 @@ describe('RecoveryService', () => {
       { decrypt: vi.fn(() => 'instance-token') } as never,
       { get: vi.fn((key: string) => (key === 'RECOVERY_SEND_HOUR' ? '9' : undefined)) } as never,
       new BillingTemplateRenderer(),
+      { assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined) } as never,
     );
     await Promise.all([
       restartedService.processDue(new Date('2027-01-20T12:00:00.000Z'), 20, {
@@ -1403,6 +1429,7 @@ describe.skipIf(process.env.RUN_DATABASE_TESTS !== '1')(
           { decrypt: vi.fn(() => 'instance-token') } as never,
           { get: vi.fn(() => undefined) } as never,
           new BillingTemplateRenderer(),
+          { assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined) } as never,
         );
 
       await prisma.recoveryAutomationSettings.update({

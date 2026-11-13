@@ -27,6 +27,7 @@ import { FinanceService } from '../finance/finance.service';
 import { formatBusinessDate, parseBusinessDate } from '../clients/utils/business-date';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
+import { WhatsAppPreparedSuccessorGuardService } from '../whatsapp/whatsapp-prepared-successor-guard.service';
 import { ListBillingDispatchesDto } from './dto/list-billing-dispatches.dto';
 import { PreviewMessageTemplateDto } from './dto/preview-message-template.dto';
 import { UpdateBillingAutomationSettingsDto } from './dto/update-billing-automation-settings.dto';
@@ -94,6 +95,8 @@ export class BillingService {
     @Inject(TokenEncryptionService) private readonly encryption: TokenEncryptionService,
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(BillingTemplateRenderer) private readonly renderer: BillingTemplateRenderer,
+    @Inject(WhatsAppPreparedSuccessorGuardService)
+    private readonly preparedSuccessorGuard: WhatsAppPreparedSuccessorGuardService,
     @Optional()
     @Inject(ReceivableCycleService)
     private readonly receivableCycleService?: ReceivableCycleService,
@@ -985,6 +988,10 @@ export class BillingService {
     let confirmedProviderMessageId: string | null = null;
 
     try {
+      await this.preparedSuccessorGuard.assertAutomatedOutboundAllowed(
+        connection.id,
+        dispatch.phone,
+      );
       const instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
       const result = await this.provider.sendText(instanceToken, {
         phone: dispatch.phone,

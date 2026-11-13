@@ -7,6 +7,7 @@ import { KiragoInstanceClient } from '../whatsapp/kirago/kirago-instance.client'
 import { KiragoWhatsAppProvider } from '../whatsapp/kirago/kirago-whatsapp.provider';
 import { WHATSAPP_PROVIDER } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
+import { WhatsAppPreparedSuccessorGuardService } from '../whatsapp/whatsapp-prepared-successor-guard.service';
 import { BillingTemplateRenderer } from '../billing/billing-template-renderer';
 import { RecoveryController } from './recovery.controller';
 import { RecoveryScheduler } from './recovery.scheduler';
@@ -24,6 +25,7 @@ import { RecoveryService } from './recovery.service';
     KiragoInstanceClient,
     KiragoWhatsAppProvider,
     TokenEncryptionService,
+    WhatsAppPreparedSuccessorGuardService,
     {
       provide: WHATSAPP_PROVIDER,
       useExisting: KiragoWhatsAppProvider,

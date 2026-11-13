@@ -9,6 +9,7 @@ import { KiragoInstanceClient } from '../whatsapp/kirago/kirago-instance.client'
 import { KiragoWhatsAppProvider } from '../whatsapp/kirago/kirago-whatsapp.provider';
 import { WHATSAPP_PROVIDER } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
+import { WhatsAppPreparedSuccessorGuardService } from '../whatsapp/whatsapp-prepared-successor-guard.service';
 import { BillingController } from './billing.controller';
 import { BillingScheduler } from './billing.scheduler';
 import { BillingService } from './billing.service';
@@ -26,6 +27,7 @@ import { BillingTemplateRenderer } from './billing-template-renderer';
     KiragoInstanceClient,
     KiragoWhatsAppProvider,
     TokenEncryptionService,
+    WhatsAppPreparedSuccessorGuardService,
     {
       provide: WHATSAPP_PROVIDER,
       useExisting: KiragoWhatsAppProvider,

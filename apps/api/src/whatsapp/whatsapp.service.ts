@@ -104,6 +104,7 @@ import { buildWhatsAppMessageCreateDataForConversation } from './whatsapp-conver
 import { WhatsAppRealtimeService } from './whatsapp-realtime.service';
 import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
+import { WhatsAppPreparedSuccessorGuardService } from './whatsapp-prepared-successor-guard.service';
 import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
 import { ReconcileWhatsAppConversationContinuityDto } from './dto/reconcile-whatsapp-conversation-continuity.dto';
 import { PrepareWhatsAppConversationSuccessorsDto } from './dto/prepare-whatsapp-conversation-successors.dto';
@@ -151,6 +152,7 @@ type ConversationPreparationResult = {
     | 'PREDECESSOR_ALREADY_LINKED'
     | 'BUSINESS_IDENTITY_MISMATCH'
     | 'SUCCESSOR_ALREADY_EXISTS'
+    | 'ACTIVE_OUTBOUND_DISPATCH'
     | 'PREPARATION_TERMINAL'
     | 'CONCURRENT_CHANGE';
 };
@@ -464,6 +466,12 @@ type WhatsAppConversationForPresenter = Prisma.WhatsAppConversationGetPayload<{
     sentAt: Date | null;
     config: { mode: 'AWAY' | 'SERVICE_UNAVAILABLE' | 'CUSTOM' };
   }>;
+  predecessorPreparation?: {
+    id: string;
+    status: 'PREPARED' | 'ACTIVATED' | 'CANCELLED' | 'FAILED';
+    targetConnectionId: string;
+    successorConversationId: string | null;
+  } | null;
 };
 
 type WhatsAppConversationMessageQuote = Pick<
@@ -555,6 +563,8 @@ export class WhatsAppService {
     private readonly mediaStorage: WhatsAppMediaStorageService,
     @Inject(WhatsAppVoiceConversionService)
     private readonly voiceConversion: WhatsAppVoiceConversionService,
+    @Inject(WhatsAppPreparedSuccessorGuardService)
+    private readonly preparedSuccessorGuard: WhatsAppPreparedSuccessorGuardService,
     @Optional()
     @Inject(WhatsAppRealtimeService)
     private readonly realtime?: WhatsAppRealtimeService,
@@ -993,6 +1003,11 @@ export class WhatsAppService {
         );
       }
 
+      await this.preparedSuccessorGuard.assertAutomatedOutboundAllowed(
+        connection.id,
+        latestRecipient.digits,
+      );
+
       const result = await this.mapProviderError(() =>
         this.provider.sendText(instanceToken, { phone, body, requestId }),
       );
@@ -1154,6 +1169,11 @@ export class WhatsAppService {
           'Dados do PIX ou destinatario foram alterados antes do envio. Tente novamente.',
         );
       }
+
+      await this.preparedSuccessorGuard.assertAutomatedOutboundAllowed(
+        latestConnection.id,
+        latestContext.phone,
+      );
 
       const instanceToken = this.encryption.decrypt(latestConnection.providerTokenEncrypted);
       const result = await this.mapProviderError(() =>
@@ -1349,6 +1369,14 @@ export class WhatsAppService {
         select: { id: true, sentAt: true, config: { select: { mode: true } } },
         orderBy: { sentAt: 'desc' as const },
         take: 1,
+      },
+      predecessorPreparation: {
+        select: {
+          id: true,
+          status: true,
+          targetConnectionId: true,
+          successorConversationId: true,
+        },
       },
     } satisfies Prisma.WhatsAppConversationInclude;
 
@@ -4170,6 +4198,14 @@ export class WhatsAppService {
           orderBy: { sentAt: 'desc' },
           take: 1,
         },
+        predecessorPreparation: {
+          select: {
+            id: true,
+            status: true,
+            targetConnectionId: true,
+            successorConversationId: true,
+          },
+        },
       },
     });
 
@@ -4252,6 +4288,14 @@ export class WhatsAppService {
         labelAssignments: {
           select: { label: { select: { id: true, name: true, color: true } } },
           orderBy: { label: { name: 'asc' } },
+        },
+        predecessorPreparation: {
+          select: {
+            id: true,
+            status: true,
+            targetConnectionId: true,
+            successorConversationId: true,
+          },
         },
       },
     });
@@ -4782,6 +4826,11 @@ export class WhatsAppService {
           'Telefone do cliente foi alterado antes do envio. Tente novamente.',
         );
       }
+
+      await this.preparedSuccessorGuard.assertAutomatedOutboundAllowed(
+        connection.id,
+        dispatch.phone,
+      );
 
       const sentResult = await this.mapProviderError(() =>
         this.provider.sendText(instanceToken, { phone, body, requestId }),
@@ -7053,6 +7102,26 @@ export class WhatsAppService {
         preparationId: null,
         status: 'CONFLICT',
         reason: 'BUSINESS_IDENTITY_MISMATCH',
+      };
+    }
+
+    const activeDispatch = await tx.messageDispatch.findFirst({
+      where: {
+        whatsAppConnectionId: input.targetConnection.id,
+        phone: {
+          in: this.preparedSuccessorGuard.phoneCandidates(predecessor.phoneNormalized),
+        },
+        status: { in: ['PENDING', 'SCHEDULED', 'PROCESSING'] },
+      },
+      select: { id: true },
+    });
+    if (activeDispatch) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'CONFLICT',
+        reason: 'ACTIVE_OUTBOUND_DISPATCH',
       };
     }
 
@@ -9988,6 +10057,14 @@ export class WhatsAppService {
               mode: attendanceAutoReply?.config.mode ?? null,
               executionId: attendanceAutoReply?.id ?? null,
             },
+          }
+        : null,
+      continuityPreparation: conversation.predecessorPreparation
+        ? {
+            id: conversation.predecessorPreparation.id,
+            status: conversation.predecessorPreparation.status,
+            targetConnectionId: conversation.predecessorPreparation.targetConnectionId,
+            successorConversationId: conversation.predecessorPreparation.successorConversationId,
           }
         : null,
       createdAt: conversation.createdAt,

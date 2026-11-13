@@ -858,6 +858,8 @@ export function WhatsAppInbox({
   const selectedConversationCountry = selectedConversation?.phoneCountry ?? null;
   const selectedConversationHasGlobalIdentity =
     hasLinkedCanonicalGlobalIdentity(selectedConversation);
+  const selectedConversationHasPreparedSuccessor =
+    selectedConversation?.continuityPreparation?.status === 'PREPARED';
   const manualTextAllowed = resolveManualOperationAvailability({
     globalEnabled: globalManualTextEnabled,
     legacyEnabled: internationalManualTextSendEnabled,
@@ -898,8 +900,12 @@ export function WhatsAppInbox({
     manualTextAllowed &&
     !internationalMediaAllowed &&
     !internationalVoiceAllowed;
-  const composerMediaBlocked = selectedConversationIsInternational && !internationalMediaAllowed;
-  const composerVoiceBlocked = selectedConversationIsInternational && !internationalVoiceAllowed;
+  const composerMediaBlocked =
+    selectedConversationHasPreparedSuccessor ||
+    (selectedConversationIsInternational && !internationalMediaAllowed);
+  const composerVoiceBlocked =
+    selectedConversationHasPreparedSuccessor ||
+    (selectedConversationIsInternational && !internationalVoiceAllowed);
   const composerTextBlocked = selectedConversationIsInternational && !manualTextAllowed;
   const internationalComposerBlocked =
     composerTextBlocked && composerMediaBlocked && composerVoiceBlocked;
@@ -2975,6 +2981,20 @@ export function WhatsAppInbox({
       }
     }
     if (!body && !mediaToSend) return false;
+    if (selectedConversationHasPreparedSuccessor) {
+      if (mediaToSend || replyToSend) {
+        setSendError(
+          'A primeira mensagem da continuidade deve ser um novo texto simples, sem anexo ou resposta.',
+        );
+        return false;
+      }
+      const confirmed = window.confirm(
+        'Esta conversa possui uma sucessora preparada na conexão ativa.\n\n' +
+          'Ao confirmar, o texto será enviado pela nova conversa. O vínculo só será ativado se o WhatsApp confirmar o envio.\n\n' +
+          'Deseja continuar?',
+      );
+      if (!confirmed) return false;
+    }
     if (replyToSend && mediaToSend && mediaToSend.kind !== 'STICKER') {
       setSendError('Resposta com anexo ainda não está disponível. Envie uma resposta em texto.');
       return false;
@@ -3013,6 +3033,9 @@ export function WhatsAppInbox({
         : await sendWhatsAppConversationMessage(selectedConversation.id, {
             body,
             requestId,
+            ...(selectedConversationHasPreparedSuccessor
+              ? { continueOnPreparedSuccessor: true }
+              : {}),
             ...(replyToSend ? { replyToMessageId: replyToSend.id } : {}),
           });
       pendingSendScrollConversationRef.current = selectedConversation.id;
@@ -4485,10 +4508,16 @@ export function WhatsAppInbox({
               <ConversationMessages
                 conversationId={selectedConversation.id}
                 outboundActionsDisabled={
-                  selectedConversationIsInternational && !messageActionsAllowed
+                  selectedConversationHasPreparedSuccessor ||
+                  (selectedConversationIsInternational && !messageActionsAllowed)
                 }
-                outboundReplyDisabled={selectedConversationIsInternational && !repliesAllowed}
-                restrictedOutboundActionsDisabled={selectedConversationIsInternational}
+                outboundReplyDisabled={
+                  selectedConversationHasPreparedSuccessor ||
+                  (selectedConversationIsInternational && !repliesAllowed)
+                }
+                restrictedOutboundActionsDisabled={
+                  selectedConversationHasPreparedSuccessor || selectedConversationIsInternational
+                }
                 messages={messages}
                 hasOlder={hasOlderMessages}
                 loading={messagesLoading}
@@ -4537,6 +4566,20 @@ export function WhatsAppInbox({
                 onOpenSharedContactClient={openSharedContactClient}
               />
 
+              {selectedConversationHasPreparedSuccessor ? (
+                <div
+                  className="conversation-prepared-continuity-notice"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <strong>Continuidade preparada</strong>
+                  <span>
+                    O primeiro texto será enviado pela conexão ativa somente após sua confirmação. A
+                    conversa será ativada apenas quando o WhatsApp confirmar o envio.
+                  </span>
+                </div>
+              ) : null}
+
               <ConversationComposer
                 composerRef={composerRef}
                 conversationId={selectedConversation.id}
@@ -4560,7 +4603,9 @@ export function WhatsAppInbox({
                 textOnly={internationalTextOnly}
                 mediaBlocked={composerMediaBlocked}
                 voiceBlocked={composerVoiceBlocked}
-                stickersBlocked={selectedConversationIsInternational}
+                stickersBlocked={
+                  selectedConversationHasPreparedSuccessor || selectedConversationIsInternational
+                }
                 onChange={(value) => {
                   setDrafts((current) => ({
                     ...current,

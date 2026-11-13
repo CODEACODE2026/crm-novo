@@ -26,6 +26,7 @@ import { resolveCanonicalPhoneIdentity } from '../common/phone/canonical-phone-i
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WHATSAPP_PROVIDER, type WhatsAppProvider } from '../whatsapp/provider/whatsapp-provider';
 import { TokenEncryptionService } from '../whatsapp/security/token-encryption.service';
+import { WhatsAppPreparedSuccessorGuardService } from '../whatsapp/whatsapp-prepared-successor-guard.service';
 import { ListRecoveryCampaignsDto } from './dto/list-recovery-campaigns.dto';
 import { UpdateRecoveryAutomationSettingsDto } from './dto/update-recovery-automation-settings.dto';
 
@@ -118,6 +119,8 @@ export class RecoveryService {
     @Inject(TokenEncryptionService) private readonly encryption: TokenEncryptionService,
     @Inject(ConfigService) private readonly config: ConfigService,
     @Inject(BillingTemplateRenderer) private readonly renderer: BillingTemplateRenderer,
+    @Inject(WhatsAppPreparedSuccessorGuardService)
+    private readonly preparedSuccessorGuard: WhatsAppPreparedSuccessorGuardService,
   ) {}
 
   async handleClientStatusChange(
@@ -933,6 +936,10 @@ export class RecoveryService {
     let instanceToken: string;
 
     try {
+      await this.preparedSuccessorGuard.assertAutomatedOutboundAllowed(
+        connection.id,
+        latestDispatch.phone,
+      );
       instanceToken = this.encryption.decrypt(connection.providerTokenEncrypted);
     } catch (error) {
       return this.markRetry(

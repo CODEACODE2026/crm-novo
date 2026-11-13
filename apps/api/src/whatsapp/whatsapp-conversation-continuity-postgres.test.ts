@@ -2,6 +2,7 @@ import { ConflictException } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { WhatsAppPreparedSuccessorGuardService } from './whatsapp-prepared-successor-guard.service';
 import { WhatsAppService } from './whatsapp.service';
 
 const runDatabaseTests = process.env.RUN_DATABASE_TESTS === '1';
@@ -15,6 +16,7 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     connections: new Set<string>(),
     conversations: new Set<string>(),
     messages: new Set<string>(),
+    dispatches: new Set<string>(),
   };
 
   beforeAll(async () => prisma.$connect());
@@ -35,6 +37,7 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     await prisma.whatsAppAttendance.deleteMany({
       where: { conversationId: { in: conversationIds } },
     });
+    await prisma.messageDispatch.deleteMany({ where: { id: { in: [...created.dispatches] } } });
     await prisma.whatsAppMessage.deleteMany({ where: { id: { in: [...created.messages] } } });
     await prisma.whatsAppConversation.deleteMany({ where: { id: { in: conversationIds } } });
     await prisma.whatsAppConnection.deleteMany({
@@ -129,6 +132,16 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
       preparation.successorConversationId,
     );
 
+    const automatedOutboundGuard = new WhatsAppPreparedSuccessorGuardService(prisma as never);
+    const automatedOutboundError: unknown = await automatedOutboundGuard
+      .assertAutomatedOutboundAllowed(successorConnection.id, client.phoneNormalized)
+      .catch((caught: unknown) => caught);
+    expect(automatedOutboundError).toBeInstanceOf(ConflictException);
+    if (!(automatedOutboundError instanceof ConflictException)) throw automatedOutboundError;
+    expect(automatedOutboundError.getResponse()).toMatchObject({
+      code: 'WHATSAPP_PREPARED_SUCCESSOR_AUTOMATION_BLOCKED',
+    });
+
     await expect(
       service.sendConversationTextMessage(preparation.successorConversationId, {
         body: 'sem confirmacao',
@@ -183,6 +196,11 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
         undefined as never,
         undefined as never,
         undefined as never,
+        new WhatsAppPreparedSuccessorGuardService(prisma as never),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
       ),
     };
   }
@@ -337,6 +355,71 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
         where: { id: preparation.id },
       }),
     ).toMatchObject({ status: 'CANCELLED', successorConversationId: null });
+  });
+
+  it('blocks prepare-only while an outbound automation dispatch is active', async () => {
+    const actor = await createActor();
+    const client = await createClient('554499992003');
+    const predecessorConnection = await createConnection('HML dispatch antiga');
+    const successorConnection = await createConnection('HML dispatch nova', true);
+    const predecessor = await createConversation(
+      predecessorConnection.id,
+      client.id,
+      client.phoneNormalized,
+      new Date('2026-11-09T13:00:00.000Z'),
+    );
+    const dispatch = await prisma.messageDispatch.create({
+      data: {
+        clientId: client.id,
+        whatsAppConnectionId: successorConnection.id,
+        phone: client.phoneNormalized,
+        body: 'automacao em processamento',
+        origin: 'BILLING',
+        status: 'PROCESSING',
+        requestId: `hml-dispatch-${randomUUID()}`,
+      },
+    });
+    created.dispatches.add(dispatch.id);
+    const { service, sendText } = serviceFactory();
+
+    const dryRun = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-active-dispatch',
+        predecessorConversationIds: [predecessor.id],
+        apply: false,
+      },
+      actor.id,
+    );
+
+    expect(dryRun.results).toEqual([
+      expect.objectContaining({
+        predecessorConversationId: predecessor.id,
+        status: 'CONFLICT',
+        reason: 'ACTIVE_OUTBOUND_DISPATCH',
+      }),
+    ]);
+    expect(dryRun.summary).toMatchObject({ prepared: 0, conflicts: 1 });
+    const applyError: unknown = await service
+      .prepareConversationSuccessors(
+        {
+          targetConnectionId: successorConnection.id,
+          batchKey: 'continuity1-hml-active-dispatch',
+          predecessorConversationIds: [predecessor.id],
+          apply: true,
+        },
+        actor.id,
+      )
+      .catch((caught: unknown) => caught);
+    expect(applyError).toBeInstanceOf(ConflictException);
+    if (!(applyError instanceof ConflictException)) throw applyError;
+    expect(applyError.getResponse()).toMatchObject({ code: 'WHATSAPP_PREPARE_BATCH_BLOCKED' });
+    expect(
+      await prisma.whatsAppConversationSuccessorPreparation.count({
+        where: { predecessorConversationId: predecessor.id },
+      }),
+    ).toBe(0);
+    expect(sendText).not.toHaveBeenCalled();
   });
 
   it('reconciles the three sanitized pairs, stays idempotent and uses only the successor for new sends', async () => {

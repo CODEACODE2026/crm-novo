@@ -472,6 +472,7 @@ function serviceFactory({
   voiceConversionOverrides = {},
   realtimeOverrides = {},
   autoReplyOverrides = {},
+  preparedSuccessorGuardOverrides = {},
   prismaOverrides = {},
 }: {
   currentConnection?: ReturnType<typeof connection> | null;
@@ -482,6 +483,7 @@ function serviceFactory({
   voiceConversionOverrides?: Record<string, unknown>;
   realtimeOverrides?: Record<string, unknown>;
   autoReplyOverrides?: Record<string, unknown>;
+  preparedSuccessorGuardOverrides?: Record<string, unknown>;
   prismaOverrides?: Record<string, unknown>;
 } = {}) {
   const txClientReferenceUpdate = vi.fn();
@@ -557,6 +559,7 @@ function serviceFactory({
           ),
       ),
       findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
       findUniqueOrThrow: vi.fn(),
     },
     paymentIntent: {
@@ -763,6 +766,7 @@ function serviceFactory({
           update: txReceivableUpdate,
         },
         messageDispatch: {
+          findFirst: prisma.messageDispatch.findFirst,
           update: vi.fn((args: { data?: { providerMessageId?: string | null } }) =>
             Promise.resolve(
               dispatch({
@@ -790,8 +794,7 @@ function serviceFactory({
         whatsAppConnection: prisma.whatsAppConnection,
         whatsAppConversation: prisma.whatsAppConversation,
         whatsAppConversationContinuity: prisma.whatsAppConversationContinuity,
-        whatsAppConversationSuccessorPreparation:
-          prisma.whatsAppConversationSuccessorPreparation,
+        whatsAppConversationSuccessorPreparation: prisma.whatsAppConversationSuccessorPreparation,
         whatsAppAttendance: prisma.whatsAppAttendance,
         whatsAppConversationLabel: prisma.whatsAppConversationLabel,
         whatsAppConversationLabelAssignment: prisma.whatsAppConversationLabelAssignment,
@@ -902,6 +905,11 @@ function serviceFactory({
     recordManualOutboundMessage: vi.fn().mockResolvedValue(undefined),
     resolveActiveAttendance: vi.fn().mockResolvedValue(undefined),
   };
+  const preparedSuccessorGuard = {
+    assertAutomatedOutboundAllowed: vi.fn().mockResolvedValue(undefined),
+    phoneCandidates: vi.fn((phone: string) => [phone]),
+    ...preparedSuccessorGuardOverrides,
+  };
 
   return {
     service: new WhatsAppService(
@@ -914,6 +922,7 @@ function serviceFactory({
       normalizer as never,
       mediaStorage as never,
       voiceConversion as never,
+      preparedSuccessorGuard as never,
       realtime as never,
       undefined,
       autoReply as never,
@@ -929,6 +938,7 @@ function serviceFactory({
     realtime,
     autoReply,
     attendance,
+    preparedSuccessorGuard,
     plans,
     txClientCreate,
     txClientReferenceUpdate,
@@ -4048,6 +4058,30 @@ describe('WhatsAppService', () => {
     expect(JSON.stringify((prisma.$transaction as MockWithCalls).mock.calls)).not.toContain(
       'PIX-COPY-PASTE-CURRENT',
     );
+  });
+
+  it('blocks PIX provider calls when the destination successor is PREPARED', async () => {
+    const guardError = new ConflictException({
+      code: 'WHATSAPP_PREPARED_SUCCESSOR_AUTOMATION_BLOCKED',
+      message: 'prepared successor',
+    });
+    const { service, provider, preparedSuccessorGuard } = serviceFactory({
+      currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      preparedSuccessorGuardOverrides: {
+        assertAutomatedOutboundAllowed: vi.fn().mockRejectedValue(guardError),
+      },
+    });
+
+    const result = await service.sendPixPaymentIntent('payment-intent-id', 'user-id');
+
+    expect(preparedSuccessorGuard.assertAutomatedOutboundAllowed).toHaveBeenCalledWith(
+      connection().id,
+      '5544999999999',
+    );
+    expect(provider.sendText).not.toHaveBeenCalled();
+    expect(provider.sendButtons).not.toHaveBeenCalled();
+    expect(provider.sendPixPayment).not.toHaveBeenCalled();
+    expect(result.success).toBe(false);
   });
 
   it('uses PixPayment only behind both gates and preserves the exact charge data', async () => {
@@ -10490,6 +10524,14 @@ describe('WhatsAppService', () => {
         orderBy: { sentAt: 'desc' },
         take: 1,
       },
+      predecessorPreparation: {
+        select: {
+          id: true,
+          status: true,
+          targetConnectionId: true,
+          successorConversationId: true,
+        },
+      },
     });
     expect(findManyArgs.where?.OR as unknown[] | undefined).toEqual(
       expect.arrayContaining([
@@ -16856,9 +16898,11 @@ describe('WhatsApp conversation continuity', () => {
           findUnique: vi.fn().mockResolvedValue(target),
         },
         whatsAppConversation: {
-          findUnique: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) =>
-            Promise.resolve('id' in args.where ? predecessor : null),
-          ),
+          findUnique: vi
+            .fn()
+            .mockImplementation((args: { where: Record<string, unknown> }) =>
+              Promise.resolve('id' in args.where ? predecessor : null),
+            ),
           create: vi.fn(),
         },
       },
@@ -16907,9 +16951,11 @@ describe('WhatsApp conversation continuity', () => {
       prismaOverrides: {
         whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
         whatsAppConversation: {
-          findUnique: vi.fn().mockImplementation((args: { where: Record<string, unknown> }) =>
-            Promise.resolve('id' in args.where ? predecessor : null),
-          ),
+          findUnique: vi
+            .fn()
+            .mockImplementation((args: { where: Record<string, unknown> }) =>
+              Promise.resolve('id' in args.where ? predecessor : null),
+            ),
           create: vi.fn().mockResolvedValue({ id: successorId }),
         },
         whatsAppConversationSuccessorPreparation: {

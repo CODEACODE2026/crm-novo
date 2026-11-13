@@ -188,14 +188,12 @@ describe('international manual text capability', () => {
     expect(whatsAppInboxSource).toContain('globalEnabled: globalManualMediaEnabled');
     expect(whatsAppInboxSource).toContain('globalEnabled: globalManualVoiceEnabled');
     expect(whatsAppInboxSource).toContain('hasLinkedCanonicalGlobalIdentity(');
-    expect(whatsAppInboxSource).toContain(
-      'outboundReplyDisabled={selectedConversationIsInternational && !repliesAllowed}',
-    );
+    expect(whatsAppInboxSource).toContain('selectedConversationIsInternational && !repliesAllowed');
     expect(whatsAppInboxSource).toContain(
       'selectedConversationIsInternational && !messageActionsAllowed',
     );
     expect(whatsAppInboxSource).toContain(
-      'restrictedOutboundActionsDisabled={selectedConversationIsInternational}',
+      'selectedConversationHasPreparedSuccessor || selectedConversationIsInternational',
     );
     expect(whatsAppInboxSource).toContain('textOnly={internationalTextOnly}');
     expect(whatsAppInboxSource).toContain('textBlocked={composerTextBlocked}');
@@ -4268,5 +4266,18 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(globalStylesSource).toContain('text-overflow: ellipsis;');
     expect(globalStylesSource).toContain('min-height: 44px;');
     expect(globalStylesSource).toContain('max-width: min(92%, calc(100% - 52px));');
+  });
+
+  it('requires explicit operator confirmation before activating a prepared successor', () => {
+    expect(whatsAppInboxSource).toContain(
+      "selectedConversation?.continuityPreparation?.status === 'PREPARED'",
+    );
+    expect(whatsAppInboxSource).toContain('Esta conversa possui uma sucessora preparada');
+    expect(whatsAppInboxSource).toContain('continueOnPreparedSuccessor: true');
+    expect(whatsAppInboxSource).toContain('conversa será ativada apenas quando o WhatsApp');
+    expect(whatsAppInboxSource).toContain(
+      'A primeira mensagem da continuidade deve ser um novo texto simples',
+    );
+    expect(globalStylesSource).toContain('.conversation-prepared-continuity-notice {');
   });
 });

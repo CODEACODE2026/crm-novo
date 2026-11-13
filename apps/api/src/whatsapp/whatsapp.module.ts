@@ -24,6 +24,7 @@ import { WhatsAppService } from './whatsapp.service';
 import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 import { WhatsAppAttendanceAnalyticsService } from './whatsapp-attendance-analytics.service';
+import { WhatsAppPreparedSuccessorGuardService } from './whatsapp-prepared-successor-guard.service';
 
 @Module({
   imports: [AuthModule, PrismaModule, PlansModule, FinanceModule, ReferralsModule],
@@ -42,6 +43,7 @@ import { WhatsAppAttendanceAnalyticsService } from './whatsapp-attendance-analyt
     WhatsAppAutoReplyService,
     WhatsAppAttendanceAnalyticsService,
     WhatsAppAttendanceService,
+    WhatsAppPreparedSuccessorGuardService,
     WhatsAppService,
     {
       provide: WHATSAPP_PROVIDER,

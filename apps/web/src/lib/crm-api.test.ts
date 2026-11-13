@@ -1724,6 +1724,7 @@ describe('CRM UI formatters', () => {
     await sendWhatsAppConversationMessage('conversation-id', {
       body: 'Oi',
       requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+      continueOnPreparedSuccessor: true,
     });
     await sendWhatsAppConversationMedia('conversation-id', {
       file: new File(['ogg'], 'recado.ogg', { type: 'audio/ogg' }),
@@ -1791,6 +1792,7 @@ describe('CRM UI formatters', () => {
         body: JSON.stringify({
           body: 'Oi',
           requestId: '2f419d6d-d81a-4ed8-9f38-c6ff02d37390',
+          continueOnPreparedSuccessor: true,
         }),
       }),
     );

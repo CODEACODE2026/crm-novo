@@ -23,7 +23,7 @@ describe.skipIf(!runDatabaseTests)('Reports intelligence overview on PostgreSQL 
       SELECT COUNT(*) AS total FROM "_prisma_migrations" WHERE "finished_at" IS NOT NULL
     `;
     expect(version[0]?.version).toBe(120022);
-    expect(Number(migrations[0]?.total)).toBe(63);
+    expect(Number(migrations[0]?.total)).toBe(64);
     await createFixture();
   });
 

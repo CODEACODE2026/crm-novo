@@ -192,7 +192,10 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
         undefined as never,
         undefined as never,
         { decrypt: () => 'homologation-token' } as never,
-        { get: () => undefined } as never,
+        {
+          get: (name: string) =>
+            name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED' ? 'true' : undefined,
+        } as never,
         undefined as never,
         undefined as never,
         undefined as never,

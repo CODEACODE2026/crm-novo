@@ -29,6 +29,27 @@ describe('validateEnv', () => {
     });
   });
 
+  it('keeps successor preparation apply disabled when the flag is absent', () => {
+    expect(
+      validateEnv({ NODE_ENV: 'test' }).WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED,
+    ).toBeUndefined();
+  });
+
+  it.each(['true', 'false'])('accepts WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED=%s', (value) => {
+    expect(validateEnv({ WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: value })).toMatchObject({
+      WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: value,
+    });
+  });
+
+  it.each(['TRUE', '1', 'yes', ''])(
+    'rejects invalid WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED=%j',
+    (value) => {
+      expect(() => validateEnv({ WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: value })).toThrow(
+        'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED deve ser true ou false.',
+      );
+    },
+  );
+
   it.each(['TRUE', '1', 'yes', ''])('rejects invalid PHONE_INTERNATIONAL_ENABLED=%j', (value) => {
     expect(() => validateEnv({ PHONE_INTERNATIONAL_ENABLED: value })).toThrow(
       'PHONE_INTERNATIONAL_ENABLED deve ser true ou false.',

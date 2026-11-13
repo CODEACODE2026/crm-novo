@@ -16948,6 +16948,7 @@ describe('WhatsApp conversation continuity', () => {
       attendances: [],
     };
     const { service, prisma, provider } = serviceFactory({
+      configOverrides: { WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: 'true' },
       prismaOverrides: {
         whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
         whatsAppConversation: {
@@ -16990,6 +16991,34 @@ describe('WhatsApp conversation continuity', () => {
       expect.objectContaining({ data: expect.objectContaining({ status: 'PREPARED' }) }),
     );
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['disabled', 'false'],
+  ] as const)('blocks prepare-only writes when the apply flag is %s', async (_label, flag) => {
+    const { service, prisma, provider } = serviceFactory({
+      configOverrides: { WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: flag },
+    });
+
+    await expect(
+      service.prepareConversationSuccessors(
+        {
+          targetConnectionId: connection().id,
+          batchKey: 'continuity1-flag-gate',
+          predecessorConversationIds: [predecessorId],
+          apply: true,
+        },
+        '99999999-9999-4999-8999-999999999999',
+      ),
+    ).rejects.toMatchObject({
+      response: { code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_DISABLED' },
+    });
+
+    expect(prisma.whatsAppConnection.findUnique).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversationSuccessorPreparation.create).not.toHaveBeenCalled();
     expect(provider.sendText).not.toHaveBeenCalled();
   });
 

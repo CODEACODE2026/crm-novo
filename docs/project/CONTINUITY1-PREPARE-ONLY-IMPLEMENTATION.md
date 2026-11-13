@@ -1,5 +1,12 @@
 # CONTINUITY1 PREPARE-ONLY — implementação e plano de piloto
 
+## Gate independente de escrita
+
+`WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED` tem comportamento fail-closed: ausente ou
+`false` preserva o dry-run administrativo (`apply=false`) e bloqueia `apply=true` antes de
+qualquer consulta operacional ou escrita. A habilitação futura exige autorização separada e
+não altera os guards de autenticação e administração existentes.
+
 ## Escopo
 
 Implementação de desenvolvimento para preparar sucessoras WhatsApp sem enviar mensagem,

@@ -33,6 +33,7 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
+  validateOptionalBooleanFlag(config, 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED');
   validateOptionalBooleanFlag(config, 'MERCADO_PAGO_ENABLED');
   validateOptionalBooleanFlag(config, 'MERCADO_PAGO_SANDBOX_APRO_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_BILLING_COUNTRIES');

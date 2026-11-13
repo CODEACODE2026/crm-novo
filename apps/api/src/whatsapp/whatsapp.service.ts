@@ -1478,6 +1478,16 @@ export class WhatsAppService {
     dto: PrepareWhatsAppConversationSuccessorsDto,
     actorUserId: string,
   ) {
+    if (
+      dto.apply === true &&
+      this.config.get<string>('WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED') !== 'true'
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_DISABLED',
+        message: 'A preparacao com escrita exige habilitacao operacional explicita.',
+      });
+    }
+
     const predecessorIds = [...new Set(dto.predecessorConversationIds)];
     if (predecessorIds.length !== dto.predecessorConversationIds.length) {
       throw new BadRequestException('A lista de predecessoras contem IDs duplicados.');

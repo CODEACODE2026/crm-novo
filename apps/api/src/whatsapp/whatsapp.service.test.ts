@@ -3999,8 +3999,18 @@ describe('WhatsAppService', () => {
       }),
     );
     const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
-      data?: { rawMetadata?: unknown; text?: string };
+      data?: {
+        rawMetadata?: { pixPresentation?: Record<string, unknown> };
+        text?: string;
+      };
     };
+    expect(messageCreate?.data?.rawMetadata?.pixPresentation).toEqual({
+      format: 'CTA_COPY',
+      amount: '30',
+      displayText: 'Copiar Chave PIX',
+      referenceId: 'payment-intent-id',
+      itemName: 'Cobranca inicial de ativacao - Mensal',
+    });
     expect(JSON.stringify(messageCreate?.data?.rawMetadata)).not.toContain(
       'PIX-COPY-PASTE-CURRENT',
     );
@@ -4034,7 +4044,7 @@ describe('WhatsAppService', () => {
       environment: 'PRODUCTION',
       merchantName: 'ATIVO CHEK OUT',
     };
-    const { service, provider } = serviceFactory({
+    const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
       configOverrides: {
         WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED: 'true',
@@ -4066,6 +4076,22 @@ describe('WhatsAppService', () => {
       },
     });
     expect(provider.sendButtons).not.toHaveBeenCalled();
+    const messageCreate = (prisma.whatsAppMessage.create as MockWithCalls).mock.calls[0]?.[0] as {
+      data?: { rawMetadata?: { pixPresentation?: Record<string, unknown> } };
+    };
+    expect(messageCreate?.data?.rawMetadata?.pixPresentation).toEqual({
+      format: 'PIX_PAYMENT',
+      merchantName: 'ATIVO CHEK OUT',
+      amount: '30',
+      displayText: 'Copiar Chave PIX',
+      referenceId: 'payment-intent-id',
+      itemName: 'Cobranca inicial de ativacao - Mensal',
+    });
+    const serializedMetadata = JSON.stringify(messageCreate?.data?.rawMetadata);
+    expect(serializedMetadata).not.toContain('PIX-COPY-PASTE-CURRENT');
+    expect(serializedMetadata).not.toContain('instance-token');
+    expect(serializedMetadata).not.toContain('keyType');
+    expect(serializedMetadata).not.toContain('EVP');
   });
 
   it('reuses an existing PIX conversation when only the Brazil 9th digit variant differs', async () => {
@@ -4431,6 +4457,10 @@ describe('WhatsAppService', () => {
     });
     const { service, provider, prisma } = serviceFactory({
       currentConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+      configOverrides: {
+        WHATSAPP_PIX_PAYMENT_NATIVE_ENABLED: 'true',
+        WHATSAPP_PIX_PAYMENT_NATIVE_PROVIDERS: 'FASTFLOW',
+      },
       prismaOverrides: {
         messageDispatch: {
           create: vi.fn().mockRejectedValue(duplicateError),
@@ -4455,8 +4485,11 @@ describe('WhatsAppService', () => {
 
     expect(result).toMatchObject({ status: 'SENT', reused: true, idempotent: true });
     expect(provider.sendButtons).not.toHaveBeenCalled();
+    expect(provider.sendPixPayment).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppMessage.update).not.toHaveBeenCalled();
+    expect(existingMessage.rawMetadata).not.toHaveProperty('pixPresentation');
   });
 
   it('sends MANUAL_CHARGE for a registered client using payer snapshots instead of edited client data', async () => {
@@ -10985,6 +11018,17 @@ describe('WhatsAppService', () => {
             copy_code: 'PIX-COPY-PASTE-CURRENT',
           },
         },
+        pixPresentation: {
+          format: 'PIX_PAYMENT',
+          merchantName: ' ATIVO CHECK OUT ',
+          itemName: ' Mensalidade CRM NOVO ',
+          referenceId: ' payment-intent-id ',
+          displayText: ' Copiar Chave PIX ',
+          amount: '30.00',
+          key: 'PIX-COPY-PASTE-CURRENT',
+          keyType: 'EVP',
+          token: 'provider-token-secret',
+        },
       },
     });
     const plainPixText = conversationMessage({
@@ -11022,12 +11066,128 @@ describe('WhatsAppService', () => {
         paymentIntentId: 'payment-intent-id',
         amount: '30.00',
         buttonLabel: 'Copiar Chave PIX',
+        format: 'PIX_PAYMENT',
+        merchantName: 'ATIVO CHECK OUT',
+        itemName: 'Mensalidade CRM NOVO',
+        referenceId: 'payment-intent-id',
+        displayText: 'Copiar Chave PIX',
       },
     });
     expect(result.items[1]).toMatchObject({ id: 'message-plain', pixContext: null });
     expect(result.items[0]).not.toHaveProperty('rawMetadata');
     expect(JSON.stringify(result.items[0])).not.toContain('PIX-COPY-PASTE-CURRENT');
     expect(JSON.stringify(result.items[0])).not.toContain('provider-transaction-secret');
+    expect(JSON.stringify(result.items[0])).not.toContain('provider-token-secret');
+    expect(JSON.stringify(result.items[0])).not.toContain('keyType');
+  });
+
+  it('keeps CTA_COPY explicit and falls back safely for missing or malformed PIX snapshots', async () => {
+    const pixRawMetadata = {
+      source: 'pix_whatsapp_send',
+      paymentIntentId: 'payment-intent-id',
+      amount: '30.00',
+      template: { button: { displayText: 'Copiar Chave PIX' } },
+    };
+    const ctaCopy = conversationMessage({
+      id: 'message-cta-copy',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      rawMetadata: {
+        ...pixRawMetadata,
+        pixPresentation: {
+          format: 'CTA_COPY',
+          key: 'CTA-SECRET',
+          token: 'CTA-TOKEN-SECRET',
+        },
+      },
+    });
+    const legacy = conversationMessage({
+      id: 'message-legacy',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      rawMetadata: pixRawMetadata,
+    });
+    const partial = conversationMessage({
+      id: 'message-partial',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      rawMetadata: {
+        ...pixRawMetadata,
+        pixPresentation: {
+          format: 'PIX_PAYMENT',
+          merchantName: 'ATIVO CHECK OUT',
+          key: 'PARTIAL-SECRET',
+        },
+      },
+    });
+    const malformed = conversationMessage({
+      id: 'message-malformed',
+      direction: 'OUTBOUND',
+      isFromMe: true,
+      type: 'TEXT',
+      rawMetadata: {
+        ...pixRawMetadata,
+        pixPresentation: {
+          format: 'PIX_PAYMENT',
+          merchantName: 'ATIVO CHECK OUT',
+          itemName: 'x'.repeat(65),
+          referenceId: 'payment-intent-id',
+          displayText: 'Copiar Chave PIX',
+          pixCopyPaste: 'MALFORMED-SECRET',
+        },
+      },
+    });
+    const { service } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue({ id: conversation().id }),
+          findMany: vi.fn().mockResolvedValue([]),
+          count: vi.fn().mockResolvedValue(0),
+          aggregate: vi.fn().mockResolvedValue({ _sum: { unreadCount: 0 } }),
+          create: vi.fn().mockResolvedValue(conversation()),
+          update: vi.fn().mockResolvedValue(conversation()),
+        },
+        whatsAppMessage: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          findMany: vi.fn().mockResolvedValue([malformed, partial, legacy, ctaCopy]),
+          count: vi.fn().mockResolvedValue(4),
+          create: vi.fn().mockResolvedValue(conversationMessage()),
+        },
+      },
+    });
+
+    const result = await service.listConversationMessages(conversation().id, {
+      page: 1,
+      limit: 4,
+    });
+
+    expect(result.items.map((item: { id: string }) => item.id)).toEqual([
+      'message-cta-copy',
+      'message-legacy',
+      'message-partial',
+      'message-malformed',
+    ]);
+    expect(result.items[0]?.pixContext).toMatchObject({
+      paymentIntentId: 'payment-intent-id',
+      amount: '30.00',
+      buttonLabel: 'Copiar Chave PIX',
+      format: 'CTA_COPY',
+    });
+    for (const item of result.items.slice(1)) {
+      expect(item.pixContext).toEqual({
+        paymentIntentId: 'payment-intent-id',
+        amount: '30.00',
+        buttonLabel: 'Copiar Chave PIX',
+      });
+    }
+    const serialized = JSON.stringify(result.items);
+    expect(serialized).not.toContain('CTA-SECRET');
+    expect(serialized).not.toContain('CTA-TOKEN-SECRET');
+    expect(serialized).not.toContain('PARTIAL-SECRET');
+    expect(serialized).not.toContain('MALFORMED-SECRET');
   });
 
   it('loads older conversation messages with a stable createdAt and id cursor after new realtime inserts', async () => {

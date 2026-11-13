@@ -4441,6 +4441,100 @@ a {
   color: var(--danger);
 }
 
+.conversation-pix-payment {
+  display: grid;
+  gap: 9px;
+  min-width: min(280px, 100%);
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-soft) 88%, transparent);
+  padding: 11px;
+}
+
+.conversation-bubble.outbound .conversation-pix-payment {
+  border-color: rgb(38 198 163 / 28%);
+  background: rgb(38 198 163 / 9%);
+}
+
+.conversation-pix-payment-header {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.conversation-pix-payment-header > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+}
+
+.conversation-pix-payment-header small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.conversation-pix-payment-header strong {
+  overflow-wrap: anywhere;
+}
+
+.conversation-pix-payment-mark {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.conversation-pix-payment-amount {
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: right;
+}
+
+.conversation-pix-payment-details {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.conversation-pix-payment-details > div {
+  display: grid;
+  grid-template-columns: minmax(72px, auto) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.conversation-pix-payment-details dt,
+.conversation-pix-payment-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
+.conversation-pix-payment-details dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.conversation-pix-payment-details dd {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.conversation-pix-payment .conversation-pix-copy {
+  margin-top: 0;
+}
+
 .conversation-message-actions {
   position: relative;
   z-index: 12;
@@ -17565,6 +17659,30 @@ tbody tr:hover,
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .conversation-pix-payment {
+    width: 100%;
+    min-width: 0;
+    padding: 10px;
+  }
+
+  .conversation-pix-payment-header {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .conversation-pix-payment-amount {
+    grid-column: 2;
+    text-align: left;
+  }
+
+  .conversation-pix-payment-details > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .conversation-pix-payment-details dd {
+    text-align: left;
   }
 
   .conversation-bubble.has-image-media {

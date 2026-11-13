@@ -57,6 +57,8 @@ import { CreateWhatsAppAttendanceCategoryDto } from './dto/create-whatsapp-atten
 import { ListWhatsAppAttendancesDto } from './dto/list-whatsapp-attendances.dto';
 import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
 import { ReconcileWhatsAppConversationContinuityDto } from './dto/reconcile-whatsapp-conversation-continuity.dto';
+import { PrepareWhatsAppConversationSuccessorsDto } from './dto/prepare-whatsapp-conversation-successors.dto';
+import { CancelWhatsAppConversationPreparationDto } from './dto/cancel-whatsapp-conversation-preparation.dto';
 import { UpdateWhatsAppAttendanceCategoryDto } from './dto/update-whatsapp-attendance-category.dto';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 import { WhatsAppAttendanceAnalyticsService } from './whatsapp-attendance-analytics.service';
@@ -310,6 +312,22 @@ export class WhatsAppController {
     @Req() request: AuthenticatedRequest,
   ) {
     return this.whatsAppService.reconcileConversationContinuities(dto, request.user.id);
+  }
+
+  @Post('conversation-successor-preparations/prepare')
+  prepareConversationSuccessors(
+    @Body() dto: PrepareWhatsAppConversationSuccessorsDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.whatsAppService.prepareConversationSuccessors(dto, request.user.id);
+  }
+
+  @Post('conversation-successor-preparations/:id/cancel')
+  cancelConversationSuccessorPreparation(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: CancelWhatsAppConversationPreparationDto,
+  ) {
+    return this.whatsAppService.cancelConversationSuccessorPreparation(id, dto.reason);
   }
 
   @Get('conversations/:id/messages')

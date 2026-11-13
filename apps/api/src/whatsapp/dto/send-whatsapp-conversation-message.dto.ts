@@ -1,4 +1,5 @@
-import { IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsOptional, IsString, IsUUID, MaxLength, MinLength } from 'class-validator';
 
 export class SendWhatsAppConversationMessageDto {
   @IsString()
@@ -13,4 +14,9 @@ export class SendWhatsAppConversationMessageDto {
   @IsOptional()
   @IsUUID()
   replyToMessageId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true')
+  @IsBoolean()
+  continueOnPreparedSuccessor?: boolean = false;
 }

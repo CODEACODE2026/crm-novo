@@ -21,6 +21,9 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
 
   afterEach(async () => {
     const conversationIds = [...created.conversations];
+    await prisma.whatsAppConversationSuccessorPreparation.deleteMany({
+      where: { predecessorConversationId: { in: conversationIds } },
+    });
     await prisma.whatsAppConversationContinuity.deleteMany({
       where: {
         OR: [
@@ -42,6 +45,123 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     await prisma.plan.deleteMany({ where: { id: { in: [...created.plans] } } });
     await prisma.user.deleteMany({ where: { id: { in: [...created.users] } } });
     Object.values(created).forEach((ids) => ids.clear());
+  });
+
+  it('prepares an empty hidden successor idempotently and activates only after confirmed outbound', async () => {
+    const actor = await createActor();
+    const client = await createClient('554499992001');
+    const predecessorConnection = await createConnection('HML prepare antiga');
+    const successorConnection = await createConnection('HML prepare nova', true);
+    const predecessor = await createConversation(
+      predecessorConnection.id,
+      client.id,
+      client.phoneNormalized,
+      new Date('2026-11-09T10:00:00.000Z'),
+    );
+    const historical = await createMessage(
+      predecessor.id,
+      predecessorConnection.id,
+      'historico preservado prepare-only',
+      new Date('2026-11-09T11:00:00.000Z'),
+    );
+    const { service, sendText } = serviceFactory();
+
+    const dryRun = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-pilot-5',
+        predecessorConversationIds: [predecessor.id],
+        apply: false,
+      },
+      actor.id,
+    );
+    expect(dryRun.summary).toMatchObject({ eligible: 1, prepared: 0 });
+    expect(await prisma.whatsAppConversationSuccessorPreparation.count()).toBe(0);
+
+    const applied = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-pilot-5',
+        predecessorConversationIds: [predecessor.id],
+        apply: true,
+      },
+      actor.id,
+    );
+    expect(applied.summary).toMatchObject({ prepared: 1 });
+    const preparation = await prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+      where: { predecessorConversationId: predecessor.id },
+    });
+    if (!preparation.successorConversationId) throw new Error('Missing prepared successor.');
+    created.conversations.add(preparation.successorConversationId);
+    expect(preparation.status).toBe('PREPARED');
+    expect(
+      await prisma.whatsAppMessage.count({
+        where: { conversationId: preparation.successorConversationId },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.whatsAppAttendance.count({
+        where: { conversationId: preparation.successorConversationId },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.whatsAppConversationContinuity.count({
+        where: { predecessorConversationId: predecessor.id },
+      }),
+    ).toBe(0);
+
+    const repeated = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-pilot-5',
+        predecessorConversationIds: [predecessor.id],
+        apply: true,
+      },
+      actor.id,
+    );
+    expect(repeated.summary).toMatchObject({ alreadyPrepared: 1, prepared: 0 });
+
+    const listedBefore = await service.listConversations({
+      attendanceStatus: 'ALL' as never,
+    });
+    expect(listedBefore.items.map((item) => item.id)).toContain(predecessor.id);
+    expect(listedBefore.items.map((item) => item.id)).not.toContain(
+      preparation.successorConversationId,
+    );
+
+    await expect(
+      service.sendConversationTextMessage(preparation.successorConversationId, {
+        body: 'sem confirmacao',
+        requestId: randomUUID(),
+      }),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(sendText).not.toHaveBeenCalled();
+
+    const sent = await service.sendConversationTextMessage(predecessor.id, {
+      body: 'continuar na conexao ativa',
+      requestId: randomUUID(),
+      continueOnPreparedSuccessor: true,
+    });
+    created.messages.add(sent.id);
+    expect(sent).toMatchObject({
+      conversationId: preparation.successorConversationId,
+      status: 'SENT',
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+
+    await expect(
+      prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+        where: { id: preparation.id },
+      }),
+    ).resolves.toMatchObject({ status: 'ACTIVATED', activationTrigger: 'OUTBOUND_CONFIRMED' });
+    await expect(
+      prisma.whatsAppConversationContinuity.findUniqueOrThrow({
+        where: { predecessorConversationId: predecessor.id },
+      }),
+    ).resolves.toMatchObject({ successorConversationId: preparation.successorConversationId });
+    await expect(
+      prisma.whatsAppMessage.findUniqueOrThrow({ where: { id: historical.id } }),
+    ).resolves.toMatchObject({ conversationId: predecessor.id });
   });
 
   afterAll(async () => prisma.$disconnect());
@@ -171,6 +291,53 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     created.messages.add(message.id);
     return message;
   }
+
+  it('cancels a prepared empty successor without violating the persisted state constraint', async () => {
+    const actor = await createActor();
+    const client = await createClient('554499992002');
+    const predecessorConnection = await createConnection('HML cancel antiga');
+    const successorConnection = await createConnection('HML cancel nova', true);
+    const predecessor = await createConversation(
+      predecessorConnection.id,
+      client.id,
+      client.phoneNormalized,
+      new Date('2026-11-09T12:00:00.000Z'),
+    );
+    const { service } = serviceFactory();
+
+    await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-cancel',
+        predecessorConversationIds: [predecessor.id],
+        apply: true,
+      },
+      actor.id,
+    );
+    const preparation = await prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+      where: { predecessorConversationId: predecessor.id },
+    });
+    if (!preparation.successorConversationId) throw new Error('Missing prepared successor.');
+    const successorId = preparation.successorConversationId;
+    created.conversations.add(successorId);
+
+    const cancelled = await service.cancelConversationSuccessorPreparation(
+      preparation.id,
+      'piloto cancelado antes da ativacao',
+    );
+
+    expect(cancelled).toMatchObject({
+      id: preparation.id,
+      status: 'CANCELLED',
+      successorConversationId: null,
+    });
+    expect(await prisma.whatsAppConversation.findUnique({ where: { id: successorId } })).toBeNull();
+    expect(
+      await prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+        where: { id: preparation.id },
+      }),
+    ).toMatchObject({ status: 'CANCELLED', successorConversationId: null });
+  });
 
   it('reconciles the three sanitized pairs, stays idempotent and uses only the successor for new sends', async () => {
     const actor = await createActor();

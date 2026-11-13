@@ -106,6 +106,7 @@ import { WhatsAppAutoReplyService } from './whatsapp-auto-reply.service';
 import { WhatsAppAttendanceService } from './whatsapp-attendance.service';
 import { ResolveWhatsAppAttendanceDto } from './dto/resolve-whatsapp-attendance.dto';
 import { ReconcileWhatsAppConversationContinuityDto } from './dto/reconcile-whatsapp-conversation-continuity.dto';
+import { PrepareWhatsAppConversationSuccessorsDto } from './dto/prepare-whatsapp-conversation-successors.dto';
 import { requiredWhatsAppProviderEvents } from './provider/whatsapp-provider';
 
 const providerEvents = requiredWhatsAppProviderEvents;
@@ -133,6 +134,25 @@ type ConversationContinuityResult = {
   predecessorConversationId: string | null;
   status: ConversationContinuityStatus;
   reason: ConversationContinuityReason;
+};
+type ConversationPreparationResult = {
+  predecessorConversationId: string;
+  successorConversationId: string | null;
+  preparationId: string | null;
+  status: 'ELIGIBLE' | 'PREPARED' | 'ALREADY_PREPARED' | 'MANUAL_REVIEW' | 'CONFLICT';
+  reason:
+    | 'ELIGIBLE'
+    | 'PREPARED'
+    | 'ALREADY_PREPARED'
+    | 'PREDECESSOR_NOT_FOUND'
+    | 'CLIENT_MISSING'
+    | 'CLIENT_IDENTITY_MISMATCH'
+    | 'ACTIVE_ATTENDANCE'
+    | 'PREDECESSOR_ALREADY_LINKED'
+    | 'BUSINESS_IDENTITY_MISMATCH'
+    | 'SUCCESSOR_ALREADY_EXISTS'
+    | 'PREPARATION_TERMINAL'
+    | 'CONCURRENT_CHANGE';
 };
 const allowedImageMimeTypes = new Set(['image/jpeg', 'image/png']);
 const allowedDocumentMimeTypes = new Set([
@@ -1426,6 +1446,164 @@ export class WhatsAppService {
     };
   }
 
+  async prepareConversationSuccessors(
+    dto: PrepareWhatsAppConversationSuccessorsDto,
+    actorUserId: string,
+  ) {
+    const predecessorIds = [...new Set(dto.predecessorConversationIds)];
+    if (predecessorIds.length !== dto.predecessorConversationIds.length) {
+      throw new BadRequestException('A lista de predecessoras contem IDs duplicados.');
+    }
+
+    const targetConnection = await this.prisma.whatsAppConnection.findUnique({
+      where: { id: dto.targetConnectionId },
+      select: {
+        id: true,
+        name: true,
+        provider: true,
+        providerInstanceName: true,
+        providerUserId: true,
+        phone: true,
+        status: true,
+        connected: true,
+        loggedIn: true,
+      },
+    });
+    if (!targetConnection)
+      throw new NotFoundException('Conexao WhatsApp sucessora nao encontrada.');
+    if (
+      targetConnection.status !== 'CONNECTED' ||
+      !targetConnection.connected ||
+      !targetConnection.loggedIn
+    ) {
+      throw new ConflictException('A conexao WhatsApp sucessora nao esta operacional.');
+    }
+    if (!this.normalizeBusinessWhatsAppIdentity(targetConnection.phone)) {
+      throw new ConflictException('A identidade empresarial da conexao sucessora e invalida.');
+    }
+
+    let results: ConversationPreparationResult[];
+    try {
+      results = await this.prisma.$transaction(
+        async (tx) => {
+          const batchResults: ConversationPreparationResult[] = [];
+          for (const predecessorConversationId of predecessorIds) {
+            const result = await this.prepareConversationSuccessorInTransaction(tx, {
+              predecessorConversationId,
+              targetConnection,
+              batchKey: dto.batchKey,
+              actorUserId,
+              apply: dto.apply === true,
+            });
+            if (
+              dto.apply === true &&
+              result.status !== 'PREPARED' &&
+              result.status !== 'ALREADY_PREPARED'
+            ) {
+              throw new ConflictException({
+                code: 'WHATSAPP_PREPARE_BATCH_BLOCKED',
+                message: 'O lote foi interrompido antes de qualquer gravacao parcial.',
+                blocked: result,
+              });
+            }
+            batchResults.push(result);
+          }
+          return batchResults;
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        (error.code === 'P2002' || error.code === 'P2034')
+      ) {
+        throw new ConflictException({
+          code: 'WHATSAPP_PREPARE_BATCH_CONCURRENT_CHANGE',
+          message:
+            'O lote foi interrompido por alteracao concorrente; execute o dry-run novamente.',
+        });
+      }
+      throw error;
+    }
+
+    return {
+      targetConnectionId: targetConnection.id,
+      batchKey: dto.batchKey,
+      apply: dto.apply === true,
+      summary: {
+        scanned: results.length,
+        eligible: results.filter((item) => item.status === 'ELIGIBLE').length,
+        prepared: results.filter((item) => item.status === 'PREPARED').length,
+        alreadyPrepared: results.filter((item) => item.status === 'ALREADY_PREPARED').length,
+        manualReview: results.filter((item) => item.status === 'MANUAL_REVIEW').length,
+        conflicts: results.filter((item) => item.status === 'CONFLICT').length,
+      },
+      results,
+    };
+  }
+
+  async cancelConversationSuccessorPreparation(id: string, reason: string) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const preparation = await tx.whatsAppConversationSuccessorPreparation.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            status: true,
+            successorConversationId: true,
+          },
+        });
+        if (!preparation) throw new NotFoundException('Preparacao de continuidade nao encontrada.');
+        if (preparation.status === 'CANCELLED') return preparation;
+        if (preparation.status !== 'PREPARED' || !preparation.successorConversationId) {
+          throw new ConflictException(
+            'Somente uma sucessora vazia em PREPARED pode ser cancelada.',
+          );
+        }
+
+        const [messages, attendances, continuityLinks] = await Promise.all([
+          tx.whatsAppMessage.count({
+            where: { conversationId: preparation.successorConversationId },
+          }),
+          tx.whatsAppAttendance.count({
+            where: { conversationId: preparation.successorConversationId },
+          }),
+          tx.whatsAppConversationContinuity.count({
+            where: {
+              OR: [
+                { predecessorConversationId: preparation.successorConversationId },
+                { successorConversationId: preparation.successorConversationId },
+              ],
+            },
+          }),
+        ]);
+        if (messages !== 0 || attendances !== 0 || continuityLinks !== 0) {
+          throw new ConflictException(
+            'A sucessora possui eventos reais e exige revisao manual; cancelamento automatico bloqueado.',
+          );
+        }
+
+        const cancelled = await tx.whatsAppConversationSuccessorPreparation.update({
+          where: { id },
+          data: {
+            status: 'CANCELLED',
+            cancelledAt: new Date(),
+            failureReason: reason.trim(),
+          },
+        });
+        await tx.whatsAppConversation.delete({
+          where: { id: preparation.successorConversationId },
+        });
+
+        return {
+          ...cancelled,
+          successorConversationId: null,
+        };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
   async listConversationLabels(connectionId: string) {
     await this.requireWhatsAppConnection(connectionId);
     return this.prisma.whatsAppConversationLabel.findMany({
@@ -2266,7 +2444,27 @@ export class WhatsAppService {
     id: string,
     dto: SendWhatsAppConversationMessageDto,
     forwardMetadata?: ForwardMessageMetadata,
-  ) {
+    confirmedPreparationId?: string,
+  ): Promise<ReturnType<WhatsAppService['presentConversationMessage']>> {
+    if (dto.continueOnPreparedSuccessor && !confirmedPreparationId) {
+      const preparation = await this.prisma.whatsAppConversationSuccessorPreparation.findFirst({
+        where: { predecessorConversationId: id, status: 'PREPARED' },
+        select: { id: true, successorConversationId: true },
+      });
+      if (!preparation?.successorConversationId) {
+        throw new ConflictException({
+          code: 'WHATSAPP_PREPARED_SUCCESSOR_NOT_FOUND',
+          message: 'Nao existe sucessora preparada para esta conversa.',
+        });
+      }
+      return this.sendConversationTextMessage(
+        preparation.successorConversationId,
+        { ...dto, continueOnPreparedSuccessor: false },
+        forwardMetadata,
+        preparation.id,
+      );
+    }
+
     const body = dto.body.trim();
 
     if (!body) {
@@ -2283,7 +2481,26 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
-    await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+    const successorPreparation =
+      await this.prisma.whatsAppConversationSuccessorPreparation.findUnique({
+        where: { successorConversationId: conversation.id },
+        select: { id: true, status: true },
+      });
+    if (
+      successorPreparation?.status === 'PREPARED' &&
+      successorPreparation.id !== confirmedPreparationId
+    ) {
+      throw new ConflictException({
+        code: 'WHATSAPP_PREPARED_SUCCESSOR_CONFIRMATION_REQUIRED',
+        message: 'Confirme a continuidade antes de enviar pela conexao ativa.',
+      });
+    }
+
+    await this.assertConversationIsCurrentOutboundTarget(
+      conversation.id,
+      this.prisma,
+      Boolean(confirmedPreparationId),
+    );
 
     const operation: WhatsAppOutboundOperation = dto.replyToMessageId
       ? 'MANUAL_CONVERSATION_ACTION'
@@ -2300,6 +2517,11 @@ export class WhatsAppService {
 
     if (existing) {
       this.assertMessageBelongsToConversation(existing, conversation.id);
+      if (confirmedPreparationId && existing.status === 'SENT') {
+        await this.prisma.$transaction((tx) =>
+          this.activatePreparedSuccessorInTransaction(tx, conversation.id, 'OUTBOUND_CONFIRMED'),
+        );
+      }
       return this.presentConversationMessage(existing);
     }
 
@@ -2400,7 +2622,11 @@ export class WhatsAppService {
       });
     }
     try {
-      await this.assertConversationIsCurrentOutboundTarget(conversation.id);
+      await this.assertConversationIsCurrentOutboundTarget(
+        conversation.id,
+        this.prisma,
+        Boolean(confirmedPreparationId),
+      );
     } catch (error) {
       await this.failPendingConversationMessage(
         pending.id,
@@ -2497,6 +2723,14 @@ export class WhatsAppService {
           messageId: message.id,
           occurredAt: sentAt,
         });
+
+        if (confirmedPreparationId) {
+          await this.activatePreparedSuccessorInTransaction(
+            tx,
+            conversation.id,
+            'OUTBOUND_CONFIRMED',
+          );
+        }
 
         return message;
       });
@@ -5573,6 +5807,12 @@ export class WhatsAppService {
               });
             }
 
+            await this.activatePreparedSuccessorInTransaction(
+              tx,
+              reconciled.conversationId,
+              'OUTBOUND_CONFIRMED',
+            );
+
             return {
               processed: true,
               action: 'outgoing_conversation_message_reconciled',
@@ -5631,6 +5871,12 @@ export class WhatsAppService {
             occurredAt: sentAt,
           });
         }
+
+        await this.activatePreparedSuccessorInTransaction(
+          tx,
+          conversation.id,
+          direction === 'INBOUND' ? 'INBOUND_REAL' : 'OUTBOUND_CONFIRMED',
+        );
 
         await tx.whatsAppConversation.update({
           where: { id: conversation.id },
@@ -6437,6 +6683,7 @@ export class WhatsAppService {
   ): Prisma.WhatsAppConversationWhereInput {
     const where: Prisma.WhatsAppConversationWhereInput = {
       successorLink: { is: null },
+      NOT: { successorPreparation: { is: { status: 'PREPARED' } } },
     };
 
     const attendanceStatus = query.attendanceStatus ?? WhatsAppConversationAttendanceFilter.ACTIVE;
@@ -6679,6 +6926,203 @@ export class WhatsAppService {
     }
   }
 
+  private async prepareConversationSuccessorInTransaction(
+    tx: Prisma.TransactionClient,
+    input: {
+      predecessorConversationId: string;
+      targetConnection: {
+        id: string;
+        name: string;
+        provider: WhatsAppConnection['provider'];
+        providerInstanceName: string | null;
+        providerUserId: string | null;
+        phone: string | null;
+      };
+      batchKey: string;
+      actorUserId: string;
+      apply: boolean;
+    },
+  ): Promise<ConversationPreparationResult> {
+    const existingPreparation = await tx.whatsAppConversationSuccessorPreparation.findUnique({
+      where: { predecessorConversationId: input.predecessorConversationId },
+      select: {
+        id: true,
+        successorConversationId: true,
+        targetConnectionId: true,
+        status: true,
+      },
+    });
+    if (existingPreparation) {
+      const samePreparedTarget =
+        existingPreparation.status === 'PREPARED' &&
+        existingPreparation.targetConnectionId === input.targetConnection.id &&
+        Boolean(existingPreparation.successorConversationId);
+      return {
+        predecessorConversationId: input.predecessorConversationId,
+        successorConversationId: existingPreparation.successorConversationId,
+        preparationId: existingPreparation.id,
+        status: samePreparedTarget ? 'ALREADY_PREPARED' : 'CONFLICT',
+        reason: samePreparedTarget ? 'ALREADY_PREPARED' : 'PREPARATION_TERMINAL',
+      };
+    }
+
+    const predecessor = await tx.whatsAppConversation.findUnique({
+      where: { id: input.predecessorConversationId },
+      select: {
+        id: true,
+        whatsAppConnectionId: true,
+        instanceName: true,
+        clientId: true,
+        contactName: true,
+        phone: true,
+        phoneNormalized: true,
+        phoneE164: true,
+        createdAt: true,
+        client: { select: { id: true, phoneNormalized: true, phoneE164: true } },
+        whatsAppConnection: { select: { phone: true } },
+        successorLink: { select: { successorConversationId: true } },
+        attendances: {
+          where: { status: { in: ['PENDING', 'IN_PROGRESS'] } },
+          select: { id: true },
+          take: 1,
+        },
+      },
+    });
+    if (!predecessor) {
+      return {
+        predecessorConversationId: input.predecessorConversationId,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'MANUAL_REVIEW',
+        reason: 'PREDECESSOR_NOT_FOUND',
+      };
+    }
+    if (!predecessor.clientId || !predecessor.client) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'MANUAL_REVIEW',
+        reason: 'CLIENT_MISSING',
+      };
+    }
+    const clientPhoneMatches = predecessor.phoneE164
+      ? predecessor.client.phoneE164 === predecessor.phoneE164
+      : predecessor.client.phoneNormalized === predecessor.phoneNormalized;
+    if (!clientPhoneMatches) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'MANUAL_REVIEW',
+        reason: 'CLIENT_IDENTITY_MISMATCH',
+      };
+    }
+    if (predecessor.attendances.length > 0) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'CONFLICT',
+        reason: 'ACTIVE_ATTENDANCE',
+      };
+    }
+    if (predecessor.successorLink) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: predecessor.successorLink.successorConversationId,
+        preparationId: null,
+        status: 'CONFLICT',
+        reason: 'PREDECESSOR_ALREADY_LINKED',
+      };
+    }
+    const predecessorBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(
+      predecessor.whatsAppConnection.phone,
+    );
+    const targetBusinessIdentity = this.normalizeBusinessWhatsAppIdentity(
+      input.targetConnection.phone,
+    );
+    if (
+      !predecessorBusinessIdentity ||
+      !targetBusinessIdentity ||
+      predecessorBusinessIdentity !== targetBusinessIdentity
+    ) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'CONFLICT',
+        reason: 'BUSINESS_IDENTITY_MISMATCH',
+      };
+    }
+
+    const existingSuccessor = await tx.whatsAppConversation.findUnique({
+      where: {
+        whatsAppConnectionId_phoneNormalized: {
+          whatsAppConnectionId: input.targetConnection.id,
+          phoneNormalized: predecessor.phoneNormalized,
+        },
+      },
+      select: { id: true },
+    });
+    if (existingSuccessor) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: existingSuccessor.id,
+        preparationId: null,
+        status: 'CONFLICT',
+        reason: 'SUCCESSOR_ALREADY_EXISTS',
+      };
+    }
+    if (!input.apply) {
+      return {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: null,
+        preparationId: null,
+        status: 'ELIGIBLE',
+        reason: 'ELIGIBLE',
+      };
+    }
+
+    const successor = await tx.whatsAppConversation.create({
+      data: {
+        whatsAppConnectionId: input.targetConnection.id,
+        instanceName: input.targetConnection.providerInstanceName ?? input.targetConnection.name,
+        provider: input.targetConnection.provider,
+        externalInstanceId: input.targetConnection.providerUserId,
+        clientId: predecessor.clientId,
+        contactName: predecessor.contactName,
+        phone: predecessor.phone,
+        phoneNormalized: predecessor.phoneNormalized,
+        phoneE164: predecessor.phoneE164,
+        status: 'OPEN',
+        unreadCount: 0,
+      },
+      select: { id: true },
+    });
+    const preparation = await tx.whatsAppConversationSuccessorPreparation.create({
+      data: {
+        predecessorConversationId: predecessor.id,
+        successorConversationId: successor.id,
+        successorConversationSnapshotId: successor.id,
+        targetConnectionId: input.targetConnection.id,
+        batchKey: input.batchKey,
+        idempotencyKey: `${input.batchKey}:${predecessor.id}:${input.targetConnection.id}`,
+        status: 'PREPARED',
+        createdByUserId: input.actorUserId,
+      },
+      select: { id: true },
+    });
+
+    return {
+      predecessorConversationId: predecessor.id,
+      successorConversationId: successor.id,
+      preparationId: preparation.id,
+      status: 'PREPARED',
+      reason: 'PREPARED',
+    };
+  }
+
   private normalizeBusinessWhatsAppIdentity(phone: string | null | undefined) {
     if (!phone) return null;
     const trimmed = phone.trim();
@@ -6701,11 +7145,24 @@ export class WhatsAppService {
   private async assertConversationIsCurrentOutboundTarget(
     conversationId: string,
     db: Prisma.TransactionClient | PrismaService = this.prisma,
+    allowPreparedSuccessor = false,
   ) {
-    const link = await db.whatsAppConversationContinuity.findUnique({
-      where: { predecessorConversationId: conversationId },
-      select: { successorConversationId: true },
-    });
+    const [link, preparation] = await Promise.all([
+      db.whatsAppConversationContinuity.findUnique({
+        where: { predecessorConversationId: conversationId },
+        select: { successorConversationId: true },
+      }),
+      db.whatsAppConversationSuccessorPreparation.findUnique({
+        where: { successorConversationId: conversationId },
+        select: { id: true, status: true },
+      }),
+    ]);
+    if (preparation?.status === 'PREPARED' && !allowPreparedSuccessor) {
+      throw new ConflictException({
+        code: 'WHATSAPP_PREPARED_SUCCESSOR_CONFIRMATION_REQUIRED',
+        message: 'Confirme a continuidade antes de enviar pela conexao ativa.',
+      });
+    }
     if (!link) return;
 
     throw new ConflictException({
@@ -6739,6 +7196,63 @@ export class WhatsAppService {
     return ids;
   }
 
+  private async activatePreparedSuccessorInTransaction(
+    tx: Prisma.TransactionClient,
+    successorConversationId: string,
+    trigger: 'INBOUND_REAL' | 'OUTBOUND_CONFIRMED',
+  ) {
+    const preparation = await tx.whatsAppConversationSuccessorPreparation.findUnique({
+      where: { successorConversationId },
+      select: {
+        id: true,
+        predecessorConversationId: true,
+        status: true,
+      },
+    });
+    if (!preparation || preparation.status !== 'PREPARED') return null;
+
+    const existingLink = await tx.whatsAppConversationContinuity.findFirst({
+      where: {
+        OR: [
+          { predecessorConversationId: preparation.predecessorConversationId },
+          { successorConversationId },
+        ],
+      },
+      select: { predecessorConversationId: true, successorConversationId: true },
+    });
+    if (existingLink) {
+      if (
+        existingLink.predecessorConversationId !== preparation.predecessorConversationId ||
+        existingLink.successorConversationId !== successorConversationId
+      ) {
+        return tx.whatsAppConversationSuccessorPreparation.update({
+          where: { id: preparation.id },
+          data: {
+            status: 'FAILED',
+            failedAt: new Date(),
+            failureReason: 'activation_conflicting_continuity_link',
+          },
+        });
+      }
+    } else {
+      await tx.whatsAppConversationContinuity.create({
+        data: {
+          predecessorConversationId: preparation.predecessorConversationId,
+          successorConversationId,
+        },
+      });
+    }
+
+    return tx.whatsAppConversationSuccessorPreparation.update({
+      where: { id: preparation.id },
+      data: {
+        status: 'ACTIVATED',
+        activatedAt: new Date(),
+        activationTrigger: trigger,
+      },
+    });
+  }
+
   private async tryReconcileConversationContinuity(
     tx: Prisma.TransactionClient | PrismaService,
     successor: Pick<
@@ -6748,6 +7262,12 @@ export class WhatsAppService {
     actorUserId: string | null,
   ) {
     try {
+      const preparation = await tx.whatsAppConversationSuccessorPreparation.findUnique({
+        where: { successorConversationId: successor.id },
+        select: { status: true },
+      });
+      if (preparation?.status === 'PREPARED') return null;
+
       return await this.reconcileConversationContinuityInTransaction(tx, {
         successorConversationId: successor.id,
         successor,

@@ -461,6 +461,26 @@ export function isConversationPixPaymentPresentation(message: WhatsAppConversati
   return message.pixContext?.format === 'PIX_PAYMENT';
 }
 
+export function isConversationPixPaymentCardRenderable(message: WhatsAppConversationMessage) {
+  return isConversationPixPaymentPresentation(message) && isConversationPixCopyEligible(message);
+}
+
+export function ConversationMessageText({
+  message,
+  searchTerm,
+  text,
+}: {
+  message: WhatsAppConversationMessage;
+  searchTerm: string;
+  text: string;
+}) {
+  if (!text || isConversationPixPaymentCardRenderable(message)) {
+    return null;
+  }
+
+  return <p>{renderHighlightedSearchText(text, searchTerm)}</p>;
+}
+
 export function conversationPixPaymentAmount(message: WhatsAppConversationMessage) {
   const amount = message.pixContext?.amount?.trim();
   if (!amount) return null;
@@ -6875,9 +6895,9 @@ function ConversationBubble({
           </div>
         ) : message.deleted ? (
           <p className="conversation-message-deleted">Mensagem apagada</p>
-        ) : text ? (
-          <p>{renderHighlightedSearchText(text, searchTerm)}</p>
-        ) : null}
+        ) : (
+          <ConversationMessageText message={message} searchTerm={searchTerm} text={text} />
+        )}
         {!message.deleted ? (
           <ConversationContactContent
             message={message}
@@ -6893,7 +6913,7 @@ function ConversationBubble({
         ) : null}
         {caption ? <span className="conversation-caption">{caption}</span> : null}
         {!message.deleted ? (
-          isConversationPixPaymentPresentation(message) ? (
+          isConversationPixPaymentCardRenderable(message) ? (
             <ConversationPixPaymentCard
               message={message}
               state={pixCopyState}

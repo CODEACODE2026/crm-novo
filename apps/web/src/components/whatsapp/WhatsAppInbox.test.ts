@@ -14,6 +14,7 @@ import {
   classifyContactPixState,
   classifyConversationIncomingFile,
   ConversationContactContent,
+  ConversationMessageText,
   ConversationPixCopyAction,
   ConversationPixPaymentCard,
   contactDrawerVisibleItems,
@@ -45,6 +46,7 @@ import {
   conversationMessageDisplayText,
   conversationMediaUnavailableText,
   isConversationPixCopyEligible,
+  isConversationPixPaymentCardRenderable,
   isConversationPixPaymentPresentation,
   isDeleteEligibleConversationMessage,
   isEditEligibleConversationMessage,
@@ -766,33 +768,45 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
   });
 
   it('renders PIX_PAYMENT as a localized card with sanitized presentation metadata', () => {
+    const nativeMessage = message({
+      direction: 'OUTBOUND',
+      status: 'DELIVERED',
+      text: 'Pague a cobrança pelo botão abaixo.',
+      pixContext: {
+        amount: '100.00',
+        buttonLabel: 'Copiar Chave PIX',
+        displayText: 'Copiar PIX da cobrança',
+        format: 'PIX_PAYMENT',
+        itemName: 'Mensalidade de novembro',
+        merchantName: 'ATIVO CHECK OUT',
+        paymentIntentId: 'intent-native-1',
+        referenceId: 'reference-safe-1',
+      },
+    });
     const html = renderToStaticMarkup(
-      createElement(ConversationPixPaymentCard, {
-        message: message({
-          direction: 'OUTBOUND',
-          status: 'DELIVERED',
-          text: 'Pague a cobrança pelo botão abaixo.',
-          pixContext: {
-            amount: '100.00',
-            buttonLabel: 'Copiar Chave PIX',
-            displayText: 'Copiar PIX da cobrança',
-            format: 'PIX_PAYMENT',
-            itemName: 'Mensalidade de novembro',
-            merchantName: 'ATIVO CHECK OUT',
-            paymentIntentId: 'intent-native-1',
-            referenceId: 'reference-safe-1',
-          },
+      createElement('div', null, [
+        createElement(ConversationMessageText, {
+          key: 'text',
+          message: nativeMessage,
+          searchTerm: '',
+          text: nativeMessage.text ?? '',
         }),
-        onCopyPix: vi.fn(),
-      }),
+        createElement(ConversationPixPaymentCard, {
+          key: 'card',
+          message: nativeMessage,
+          onCopyPix: vi.fn(),
+        }),
+      ]),
     );
 
+    expect(isConversationPixPaymentCardRenderable(nativeMessage)).toBe(true);
     expect(html).toContain('aria-label="Pagamento PIX"');
     expect(html).toContain('ATIVO CHECK OUT');
     expect(html).toContain('R$\u00a0100,00');
     expect(html).toContain('Mensalidade de novembro');
     expect(html).toContain('reference-safe-1');
     expect(html).toContain('Copiar PIX da cobrança');
+    expect(html).not.toContain('Pague a cobrança pelo botão abaixo.');
     expect(html).not.toContain('pixCopyPaste');
     expect(html).not.toContain('000201');
   });
@@ -818,6 +832,26 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
 
     expect(isConversationPixPaymentPresentation(ctaCopyMessage)).toBe(false);
     expect(isConversationPixPaymentPresentation(legacyMessage)).toBe(false);
+    expect(isConversationPixPaymentCardRenderable(ctaCopyMessage)).toBe(false);
+    expect(isConversationPixPaymentCardRenderable(legacyMessage)).toBe(false);
+    expect(
+      renderToStaticMarkup(
+        createElement(ConversationMessageText, {
+          message: ctaCopyMessage,
+          searchTerm: '',
+          text: 'Texto legado CTA_COPY',
+        }),
+      ),
+    ).toContain('Texto legado CTA_COPY');
+    expect(
+      renderToStaticMarkup(
+        createElement(ConversationMessageText, {
+          message: legacyMessage,
+          searchTerm: '',
+          text: 'Texto histórico sem snapshot',
+        }),
+      ),
+    ).toContain('Texto histórico sem snapshot');
     expect(
       renderToStaticMarkup(
         createElement(ConversationPixPaymentCard, {
@@ -879,6 +913,31 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
     expect(nativeHtml).toContain('PIX copiado');
     expect(nativeHtml).not.toContain('NaN');
     expect(nativeHtml).not.toContain('<dl');
+  });
+
+  it('preserves the external text when a PIX_PAYMENT snapshot cannot render its copy action', () => {
+    const incompleteMessage = message({
+      direction: 'OUTBOUND',
+      text: 'Texto preservado para fallback seguro.',
+      pixContext: {
+        amount: '30.00',
+        buttonLabel: 'Copiar Chave PIX',
+        format: 'PIX_PAYMENT',
+        paymentIntentId: '',
+      },
+    });
+
+    expect(isConversationPixPaymentPresentation(incompleteMessage)).toBe(true);
+    expect(isConversationPixPaymentCardRenderable(incompleteMessage)).toBe(false);
+    expect(
+      renderToStaticMarkup(
+        createElement(ConversationMessageText, {
+          message: incompleteMessage,
+          searchTerm: '',
+          text: incompleteMessage.text ?? '',
+        }),
+      ),
+    ).toContain('Texto preservado para fallback seguro.');
   });
 
   it('does not render a PIX copy action for regular messages or PIX-looking text without pixContext', () => {

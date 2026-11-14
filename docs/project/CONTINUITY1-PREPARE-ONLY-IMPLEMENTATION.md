@@ -7,6 +7,12 @@
 qualquer consulta operacional ou escrita. A habilitação futura exige autorização separada e
 não altera os guards de autenticação e administração existentes.
 
+`WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST` limita adicionalmente a escrita
+a UUIDs explícitos de predecessoras. A lista vazia bloqueia todo `apply=true`, mesmo quando o
+gate global está habilitado. Em lotes, todas as predecessoras devem estar autorizadas; uma única
+divergência bloqueia antes de qualquer consulta operacional ou escrita. O dry-run não consulta
+essa allowlist e permanece disponível com `apply=false`.
+
 ## Escopo
 
 Implementação de desenvolvimento para preparar sucessoras WhatsApp sem enviar mensagem,

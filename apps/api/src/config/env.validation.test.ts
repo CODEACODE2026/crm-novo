@@ -56,6 +56,25 @@ describe('validateEnv', () => {
     );
   });
 
+  it('keeps the apply predecessor allowlist empty by default and accepts unique UUIDv4 values', () => {
+    const key = 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST';
+    const value = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    expect(validateEnv({ NODE_ENV: 'test' })[key]).toBeUndefined();
+    expect(validateEnv({ [key]: value })).toMatchObject({ [key]: value });
+  });
+
+  it.each([
+    'not-a-uuid',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  ])('rejects invalid apply predecessor allowlist=%j', (value) => {
+    expect(() =>
+      validateEnv({
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST: value,
+      }),
+    ).toThrow('deve conter UUIDv4 unicos');
+  });
+
   it('keeps the future Billing pilot allowlist disabled when absent and accepts UUIDv4 pairs', () => {
     const key = 'WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST';
     const pair = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';

@@ -16894,6 +16894,9 @@ describe('WhatsApp conversation continuity', () => {
       attendances: [],
     };
     const { service, prisma, provider } = serviceFactory({
+      configOverrides: {
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST: '',
+      },
       prismaOverrides: {
         whatsAppConnection: {
           findUnique: vi.fn().mockResolvedValue(target),
@@ -17186,7 +17189,10 @@ describe('WhatsApp conversation continuity', () => {
       attendances: [],
     };
     const { service, prisma, provider } = serviceFactory({
-      configOverrides: { WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: 'true' },
+      configOverrides: {
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: 'true',
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST: predecessorId,
+      },
       prismaOverrides: {
         whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
         whatsAppConversation: {
@@ -17252,6 +17258,76 @@ describe('WhatsApp conversation continuity', () => {
       ),
     ).rejects.toMatchObject({
       response: { code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_DISABLED' },
+    });
+
+    expect(prisma.whatsAppConnection.findUnique).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversationSuccessorPreparation.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['different predecessor', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+  ] as const)(
+    'blocks prepare-only writes when the predecessor allowlist is %s',
+    async (_label, allowlist) => {
+      const { service, prisma, provider } = serviceFactory({
+        configOverrides: {
+          WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: 'true',
+          WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST: allowlist,
+        },
+      });
+
+      await expect(
+        service.prepareConversationSuccessors(
+          {
+            targetConnectionId: connection().id,
+            batchKey: 'continuity1-apply-predecessor-gate',
+            predecessorConversationIds: [predecessorId],
+            apply: true,
+          },
+          '99999999-9999-4999-8999-999999999999',
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_NOT_ALLOWED',
+          blockedPredecessorConversationIds: [predecessorId],
+        },
+      });
+
+      expect(prisma.whatsAppConnection.findUnique).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+      expect(prisma.whatsAppConversationSuccessorPreparation.create).not.toHaveBeenCalled();
+      expect(provider.sendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it('blocks the complete apply batch when one predecessor is outside the write allowlist', async () => {
+    const secondPredecessorId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const { service, prisma, provider } = serviceFactory({
+      configOverrides: {
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED: 'true',
+        WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST: predecessorId,
+      },
+    });
+
+    await expect(
+      service.prepareConversationSuccessors(
+        {
+          targetConnectionId: connection().id,
+          batchKey: 'continuity1-apply-predecessor-mixed-batch',
+          predecessorConversationIds: [predecessorId, secondPredecessorId],
+          apply: true,
+        },
+        '99999999-9999-4999-8999-999999999999',
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_NOT_ALLOWED',
+        blockedPredecessorConversationIds: [secondPredecessorId],
+      },
     });
 
     expect(prisma.whatsAppConnection.findUnique).not.toHaveBeenCalled();

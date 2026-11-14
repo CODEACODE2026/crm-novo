@@ -1492,6 +1492,26 @@ export class WhatsAppService {
     if (predecessorIds.length !== dto.predecessorConversationIds.length) {
       throw new BadRequestException('A lista de predecessoras contem IDs duplicados.');
     }
+    if (dto.apply === true) {
+      const configuredApplyPredecessors =
+        this.config.get<string>('WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST') ?? '';
+      const allowedPredecessorIds = new Set(
+        configuredApplyPredecessors
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      );
+      const blockedPredecessorConversationIds = predecessorIds.filter(
+        (predecessorId) => !allowedPredecessorIds.has(predecessorId),
+      );
+      if (blockedPredecessorConversationIds.length > 0) {
+        throw new ConflictException({
+          code: 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_NOT_ALLOWED',
+          message: 'A preparacao com escrita contem predecessora nao autorizada.',
+          blockedPredecessorConversationIds,
+        });
+      }
+    }
 
     const targetConnection = await this.prisma.whatsAppConnection.findUnique({
       where: { id: dto.targetConnectionId },

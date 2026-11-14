@@ -34,6 +34,10 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
   validateOptionalBooleanFlag(config, 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED');
+  validateOptionalUuidAllowlist(
+    config,
+    'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST',
+  );
   validateOptionalUuidPairAllowlist(
     config,
     'WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST',
@@ -111,6 +115,17 @@ function validateOptionalUuidPairAllowlist(config: EnvConfig, key: string) {
     throw new Error(
       `${key} deve conter pares UUIDv4 predecessorConversationId:messageDispatchId unicos separados por virgula.`,
     );
+  }
+}
+
+function validateOptionalUuidAllowlist(config: EnvConfig, key: string) {
+  const value = config[key];
+  if (value === undefined || value === '') return;
+
+  const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const ids = value.split(',').map((id) => id.trim());
+  if (ids.some((id) => !uuidV4.test(id)) || new Set(ids).size !== ids.length) {
+    throw new Error(`${key} deve conter UUIDv4 unicos separados por virgula.`);
   }
 }
 

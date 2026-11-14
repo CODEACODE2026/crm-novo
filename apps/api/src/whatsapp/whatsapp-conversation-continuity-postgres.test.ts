@@ -203,7 +203,11 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
             if (Object.prototype.hasOwnProperty.call(configOverrides, name)) {
               return configOverrides[name];
             }
-            return name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED' ? 'true' : undefined;
+            if (name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED') return 'true';
+            if (name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_PREDECESSOR_ALLOWLIST') {
+              return [...created.conversations].join(',');
+            }
+            return undefined;
           },
         } as never,
         undefined as never,

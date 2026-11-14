@@ -13,6 +13,8 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
     users: new Set<string>(),
     plans: new Set<string>(),
     clients: new Set<string>(),
+    clientReferences: new Set<string>(),
+    receivables: new Set<string>(),
     connections: new Set<string>(),
     conversations: new Set<string>(),
     messages: new Set<string>(),
@@ -44,6 +46,10 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
       where: { id: { in: [...created.connections] } },
     });
     await prisma.clientEvent.deleteMany({ where: { clientId: { in: [...created.clients] } } });
+    await prisma.receivable.deleteMany({ where: { id: { in: [...created.receivables] } } });
+    await prisma.clientReference.deleteMany({
+      where: { id: { in: [...created.clientReferences] } },
+    });
     await prisma.client.deleteMany({ where: { id: { in: [...created.clients] } } });
     await prisma.plan.deleteMany({ where: { id: { in: [...created.plans] } } });
     await prisma.user.deleteMany({ where: { id: { in: [...created.users] } } });
@@ -179,7 +185,7 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
 
   afterAll(async () => prisma.$disconnect());
 
-  function serviceFactory() {
+  function serviceFactory(configOverrides: Record<string, string | undefined> = {}) {
     const sendText = vi.fn().mockResolvedValue({
       providerMessageId: `hml-provider-${randomUUID()}`,
       sentAt: new Date('2026-11-11T19:00:00.000Z'),
@@ -193,8 +199,12 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
         undefined as never,
         { decrypt: () => 'homologation-token' } as never,
         {
-          get: (name: string) =>
-            name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED' ? 'true' : undefined,
+          get: (name: string) => {
+            if (Object.prototype.hasOwnProperty.call(configOverrides, name)) {
+              return configOverrides[name];
+            }
+            return name === 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED' ? 'true' : undefined;
+          },
         } as never,
         undefined as never,
         undefined as never,
@@ -423,6 +433,134 @@ describe.skipIf(!runDatabaseTests)('WhatsApp conversation continuity on PostgreS
       }),
     ).toBe(0);
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('prepares only an allowlisted future Billing pilot and preserves the dispatch through activation', async () => {
+    const actor = await createActor();
+    const client = await createClient('554499992004');
+    const predecessorConnection = await createConnection('HML piloto Billing antiga');
+    const successorConnection = await createConnection('HML piloto Billing nova', true);
+    const predecessor = await createConversation(
+      predecessorConnection.id,
+      client.id,
+      client.phoneNormalized,
+      new Date('2026-11-09T13:00:00.000Z'),
+    );
+    const reference = await prisma.clientReference.create({
+      data: {
+        clientId: client.id,
+        reference: `HML-PILOT-${randomUUID()}`,
+        planId: client.planId,
+        recurringValue: '30.00',
+        dueDate: new Date('2026-12-12T00:00:00.000Z'),
+        billingAnchorDay: 12,
+        billingNoticeDays: 3,
+      },
+    });
+    created.clientReferences.add(reference.id);
+    const receivable = await prisma.receivable.create({
+      data: {
+        clientId: client.id,
+        clientReferenceId: reference.id,
+        purpose: 'RENEWAL',
+        description: 'HML piloto Billing futuro',
+        amount: '30.00',
+        dueDate: new Date('2026-12-12T00:00:00.000Z'),
+        status: 'PENDENTE',
+      },
+    });
+    created.receivables.add(receivable.id);
+    const scheduledFor = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const dispatch = await prisma.messageDispatch.create({
+      data: {
+        clientId: client.id,
+        clientReferenceId: reference.id,
+        receivableId: receivable.id,
+        whatsAppConnectionId: successorConnection.id,
+        phone: client.phoneNormalized,
+        body: 'cobranca futura preservada',
+        origin: 'BILLING',
+        status: 'SCHEDULED',
+        requestId: `hml-pilot-billing-${randomUUID()}`,
+        scheduledFor,
+        nextAttemptAt: scheduledFor,
+        attempts: 0,
+      },
+    });
+    created.dispatches.add(dispatch.id);
+    const allowlist = `${predecessor.id}:${dispatch.id}`;
+    const { service, sendText } = serviceFactory({
+      WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST: allowlist,
+    });
+
+    const dryRun = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-future-billing-pilot',
+        predecessorConversationIds: [predecessor.id],
+        apply: false,
+      },
+      actor.id,
+    );
+    expect(dryRun.summary).toMatchObject({ scanned: 1, eligible: 1, conflicts: 0 });
+
+    const applied = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: successorConnection.id,
+        batchKey: 'continuity1-hml-future-billing-pilot',
+        predecessorConversationIds: [predecessor.id],
+        apply: true,
+      },
+      actor.id,
+    );
+    expect(applied.summary).toMatchObject({ prepared: 1, conflicts: 0 });
+    const preparation = await prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+      where: { predecessorConversationId: predecessor.id },
+    });
+    if (!preparation.successorConversationId) throw new Error('Missing prepared successor.');
+    created.conversations.add(preparation.successorConversationId);
+
+    const guard = new WhatsAppPreparedSuccessorGuardService(prisma as never);
+    await expect(
+      guard.assertAutomatedOutboundAllowed(successorConnection.id, client.phoneNormalized),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(sendText).not.toHaveBeenCalled();
+
+    const sent = await service.sendConversationTextMessage(predecessor.id, {
+      body: 'primeiro texto manual confirmado',
+      requestId: randomUUID(),
+      continueOnPreparedSuccessor: true,
+    });
+    created.messages.add(sent.id);
+    expect(sent).toMatchObject({ status: 'SENT' });
+    expect(sendText).toHaveBeenCalledTimes(1);
+    await expect(
+      guard.assertAutomatedOutboundAllowed(successorConnection.id, client.phoneNormalized),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      prisma.whatsAppConversationSuccessorPreparation.findUniqueOrThrow({
+        where: { id: preparation.id },
+      }),
+    ).resolves.toMatchObject({ status: 'ACTIVATED', activationTrigger: 'OUTBOUND_CONFIRMED' });
+    await expect(
+      prisma.whatsAppConversationContinuity.findUniqueOrThrow({
+        where: { predecessorConversationId: predecessor.id },
+      }),
+    ).resolves.toMatchObject({ successorConversationId: preparation.successorConversationId });
+    await expect(
+      prisma.messageDispatch.findUniqueOrThrow({ where: { id: dispatch.id } }),
+    ).resolves.toMatchObject({
+      status: 'SCHEDULED',
+      scheduledFor,
+      nextAttemptAt: scheduledFor,
+      attempts: 0,
+      providerMessageId: null,
+      sentAt: null,
+      receivableId: receivable.id,
+      phone: client.phoneNormalized,
+      whatsAppConnectionId: successorConnection.id,
+    });
   });
 
   it('reconciles the three sanitized pairs, stays idempotent and uses only the successor for new sends', async () => {

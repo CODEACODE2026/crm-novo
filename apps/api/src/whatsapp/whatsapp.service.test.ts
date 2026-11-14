@@ -767,6 +767,7 @@ function serviceFactory({
         },
         messageDispatch: {
           findFirst: prisma.messageDispatch.findFirst,
+          findMany: prisma.messageDispatch.findMany,
           update: vi.fn((args: { data?: { providerMessageId?: string | null } }) =>
             Promise.resolve(
               dispatch({
@@ -16924,6 +16925,243 @@ describe('WhatsApp conversation continuity', () => {
     expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
     expect(prisma.whatsAppConversationSuccessorPreparation.create).not.toHaveBeenCalled();
     expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it('allows only the explicitly allowlisted future scheduled Billing dispatch for the pilot', async () => {
+    const businessPhone = '5544999990000';
+    const dispatchId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const scheduledFor = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const target = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+      phone: businessPhone,
+    });
+    const predecessor = {
+      ...conversation({
+        id: predecessorId,
+        whatsAppConnectionId: predecessorConnectionId,
+        clientId: client().id,
+      }),
+      phoneE164: null,
+      client: { ...client(), phoneE164: null },
+      whatsAppConnection: { phone: businessPhone },
+      successorLink: null,
+      attendances: [],
+    };
+    const activeDispatch = {
+      id: dispatchId,
+      clientId: client().id,
+      receivableId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      origin: 'BILLING',
+      status: 'SCHEDULED',
+      scheduledFor,
+      nextAttemptAt: scheduledFor,
+      attempts: 0,
+      providerMessageId: null,
+      errorCode: null,
+      sentAt: null,
+    };
+    const { service, prisma, provider } = serviceFactory({
+      configOverrides: {
+        WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST: `${predecessorId}:${dispatchId}`,
+      },
+      prismaOverrides: {
+        whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockImplementation((args: { where: Record<string, unknown> }) =>
+              Promise.resolve('id' in args.where ? predecessor : null),
+            ),
+          create: vi.fn(),
+        },
+        messageDispatch: { findMany: vi.fn().mockResolvedValue([activeDispatch]) },
+      },
+    });
+
+    const result = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: target.id,
+        batchKey: 'continuity1-williane-pilot-fix1',
+        predecessorConversationIds: [predecessorId],
+        apply: false,
+      },
+      '99999999-9999-4999-8999-999999999999',
+    );
+
+    expect(result.summary).toMatchObject({ scanned: 1, eligible: 1, conflicts: 0 });
+    expect(result.results).toEqual([
+      expect.objectContaining({ status: 'ELIGIBLE', reason: 'ELIGIBLE' }),
+    ]);
+    expect(prisma.whatsAppConversation.create).not.toHaveBeenCalled();
+    expect(prisma.whatsAppConversationSuccessorPreparation.create).not.toHaveBeenCalled();
+    expect(provider.sendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing allowlist', undefined, {}],
+    ['wrong pair', `${predecessorId}:aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa`, {}],
+    [
+      'processing',
+      `${predecessorId}:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+      { status: 'PROCESSING' },
+    ],
+    ['attempted', `${predecessorId}:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`, { attempts: 1 }],
+    [
+      'too close',
+      `${predecessorId}:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+      { scheduledFor: new Date(Date.now() + 60 * 60 * 1000) },
+    ],
+    [
+      'already provider-backed',
+      `${predecessorId}:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee`,
+      { providerMessageId: 'provider-id' },
+    ],
+  ] as const)(
+    'keeps ACTIVE_OUTBOUND_DISPATCH for unsafe pilot dispatch: %s',
+    async (_label, allowlist, override) => {
+      const businessPhone = '5544999990000';
+      const dispatchId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      const scheduledFor = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      const target = connection({
+        status: 'CONNECTED',
+        connected: true,
+        loggedIn: true,
+        phone: businessPhone,
+      });
+      const predecessor = {
+        ...conversation({
+          id: predecessorId,
+          whatsAppConnectionId: predecessorConnectionId,
+          clientId: client().id,
+        }),
+        phoneE164: null,
+        client: { ...client(), phoneE164: null },
+        whatsAppConnection: { phone: businessPhone },
+        successorLink: null,
+        attendances: [],
+      };
+      const dispatch = {
+        id: dispatchId,
+        clientId: client().id,
+        receivableId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        origin: 'BILLING',
+        status: 'SCHEDULED',
+        scheduledFor,
+        nextAttemptAt: scheduledFor,
+        attempts: 0,
+        providerMessageId: null,
+        errorCode: null,
+        sentAt: null,
+        ...override,
+      };
+      if ('scheduledFor' in override) dispatch.nextAttemptAt = override.scheduledFor;
+      const { service } = serviceFactory({
+        configOverrides: {
+          WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST: allowlist,
+        },
+        prismaOverrides: {
+          whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
+          whatsAppConversation: {
+            findUnique: vi
+              .fn()
+              .mockImplementation((args: { where: Record<string, unknown> }) =>
+                Promise.resolve('id' in args.where ? predecessor : null),
+              ),
+          },
+          messageDispatch: { findMany: vi.fn().mockResolvedValue([dispatch]) },
+        },
+      });
+
+      const result = await service.prepareConversationSuccessors(
+        {
+          targetConnectionId: target.id,
+          batchKey: 'continuity1-williane-pilot-fix1-blocked',
+          predecessorConversationIds: [predecessorId],
+          apply: false,
+        },
+        '99999999-9999-4999-8999-999999999999',
+      );
+
+      expect(result.results).toEqual([
+        expect.objectContaining({ status: 'CONFLICT', reason: 'ACTIVE_OUTBOUND_DISPATCH' }),
+      ]);
+    },
+  );
+
+  it('blocks the pilot when more than one active dispatch exists', async () => {
+    const businessPhone = '5544999990000';
+    const dispatchId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+    const scheduledFor = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const target = connection({
+      status: 'CONNECTED',
+      connected: true,
+      loggedIn: true,
+      phone: businessPhone,
+    });
+    const predecessor = {
+      ...conversation({
+        id: predecessorId,
+        whatsAppConnectionId: predecessorConnectionId,
+        clientId: client().id,
+      }),
+      phoneE164: null,
+      client: { ...client(), phoneE164: null },
+      whatsAppConnection: { phone: businessPhone },
+      successorLink: null,
+      attendances: [],
+    };
+    const dispatch = {
+      id: dispatchId,
+      clientId: client().id,
+      receivableId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      origin: 'BILLING',
+      status: 'SCHEDULED',
+      scheduledFor,
+      nextAttemptAt: scheduledFor,
+      attempts: 0,
+      providerMessageId: null,
+      errorCode: null,
+      sentAt: null,
+    };
+    const { service } = serviceFactory({
+      configOverrides: {
+        WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST: `${predecessorId}:${dispatchId}`,
+      },
+      prismaOverrides: {
+        whatsAppConnection: { findUnique: vi.fn().mockResolvedValue(target) },
+        whatsAppConversation: {
+          findUnique: vi
+            .fn()
+            .mockImplementation((args: { where: Record<string, unknown> }) =>
+              Promise.resolve('id' in args.where ? predecessor : null),
+            ),
+        },
+        messageDispatch: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([
+              dispatch,
+              { ...dispatch, id: 'aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa' },
+            ]),
+        },
+      },
+    });
+
+    const result = await service.prepareConversationSuccessors(
+      {
+        targetConnectionId: target.id,
+        batchKey: 'continuity1-williane-pilot-fix1-multiple',
+        predecessorConversationIds: [predecessorId],
+        apply: false,
+      },
+      '99999999-9999-4999-8999-999999999999',
+    );
+
+    expect(result.results).toEqual([
+      expect.objectContaining({ status: 'CONFLICT', reason: 'ACTIVE_OUTBOUND_DISPATCH' }),
+    ]);
   });
 
   it('creates only an empty successor and an auditable PREPARED record', async () => {

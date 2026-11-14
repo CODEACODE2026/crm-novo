@@ -7115,7 +7115,7 @@ export class WhatsAppService {
       };
     }
 
-    const activeDispatch = await tx.messageDispatch.findFirst({
+    const activeDispatches = await tx.messageDispatch.findMany({
       where: {
         whatsAppConnectionId: input.targetConnection.id,
         phone: {
@@ -7123,9 +7123,33 @@ export class WhatsAppService {
         },
         status: { in: ['PENDING', 'SCHEDULED', 'PROCESSING'] },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        clientId: true,
+        receivableId: true,
+        origin: true,
+        status: true,
+        scheduledFor: true,
+        nextAttemptAt: true,
+        attempts: true,
+        providerMessageId: true,
+        errorCode: true,
+        sentAt: true,
+      },
+      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      take: 2,
     });
-    if (activeDispatch) {
+    const onlyDispatch = activeDispatches.length === 1 ? activeDispatches[0] : null;
+    const futureBillingPilotAllowed = Boolean(
+      onlyDispatch &&
+      this.isFutureBillingPilotDispatchAllowed({
+        predecessorConversationId: predecessor.id,
+        predecessorClientId: predecessor.clientId,
+        dispatch: onlyDispatch,
+        now: new Date(),
+      }),
+    );
+    if (activeDispatches.length > 0 && !futureBillingPilotAllowed) {
       return {
         predecessorConversationId: predecessor.id,
         successorConversationId: null,
@@ -7200,6 +7224,56 @@ export class WhatsAppService {
       status: 'PREPARED',
       reason: 'PREPARED',
     };
+  }
+
+  private isFutureBillingPilotDispatchAllowed(input: {
+    predecessorConversationId: string;
+    predecessorClientId: string;
+    dispatch: {
+      id: string;
+      clientId: string | null;
+      receivableId: string | null;
+      origin: string;
+      status: string;
+      scheduledFor: Date | null;
+      nextAttemptAt: Date | null;
+      attempts: number;
+      providerMessageId: string | null;
+      errorCode: string | null;
+      sentAt: Date | null;
+    };
+    now: Date;
+  }) {
+    const configured =
+      this.config.get<string>('WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST') ??
+      '';
+    const allowedPairs = new Set(
+      configured
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean),
+    );
+    const pair = `${input.predecessorConversationId}:${input.dispatch.id}`;
+    if (!allowedPairs.has(pair)) return false;
+
+    const minimumLeadTimeMs = 24 * 60 * 60 * 1000;
+    const scheduledFor = input.dispatch.scheduledFor?.getTime() ?? Number.NaN;
+    const nextAttemptAt = input.dispatch.nextAttemptAt?.getTime() ?? Number.NaN;
+
+    return (
+      input.dispatch.origin === 'BILLING' &&
+      input.dispatch.status === 'SCHEDULED' &&
+      input.dispatch.attempts === 0 &&
+      input.dispatch.clientId === input.predecessorClientId &&
+      Boolean(input.dispatch.receivableId) &&
+      Number.isFinite(scheduledFor) &&
+      Number.isFinite(nextAttemptAt) &&
+      scheduledFor === nextAttemptAt &&
+      scheduledFor - input.now.getTime() >= minimumLeadTimeMs &&
+      !input.dispatch.providerMessageId &&
+      !input.dispatch.errorCode &&
+      !input.dispatch.sentAt
+    );
   }
 
   private normalizeBusinessWhatsAppIdentity(phone: string | null | undefined) {

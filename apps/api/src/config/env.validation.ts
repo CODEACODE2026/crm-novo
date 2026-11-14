@@ -34,6 +34,10 @@ export function validateEnv(config: EnvConfig) {
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_PIX_BUTTONS_COUNTRIES');
   validateOptionalBooleanFlag(config, 'PHONE_INTERNATIONAL_BILLING_ENABLED');
   validateOptionalBooleanFlag(config, 'WHATSAPP_SUCCESSOR_PREPARATION_APPLY_ENABLED');
+  validateOptionalUuidPairAllowlist(
+    config,
+    'WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST',
+  );
   validateOptionalBooleanFlag(config, 'MERCADO_PAGO_ENABLED');
   validateOptionalBooleanFlag(config, 'MERCADO_PAGO_SANDBOX_APRO_ENABLED');
   validateOptionalCountryAllowlist(config, 'PHONE_INTERNATIONAL_BILLING_COUNTRIES');
@@ -93,6 +97,20 @@ function validateOptionalBooleanFlag(config: EnvConfig, key: string) {
   const value = config[key];
   if (value !== undefined && value !== 'true' && value !== 'false') {
     throw new Error(`${key} deve ser true ou false.`);
+  }
+}
+
+function validateOptionalUuidPairAllowlist(config: EnvConfig, key: string) {
+  const value = config[key];
+  if (value === undefined || value === '') return;
+
+  const uuidV4 = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+  const pairPattern = new RegExp(`^${uuidV4}:${uuidV4}$`, 'i');
+  const pairs = value.split(',').map((pair) => pair.trim());
+  if (pairs.some((pair) => !pairPattern.test(pair)) || new Set(pairs).size !== pairs.length) {
+    throw new Error(
+      `${key} deve conter pares UUIDv4 predecessorConversationId:messageDispatchId unicos separados por virgula.`,
+    );
   }
 }
 

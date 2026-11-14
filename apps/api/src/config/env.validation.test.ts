@@ -56,6 +56,26 @@ describe('validateEnv', () => {
     );
   });
 
+  it('keeps the future Billing pilot allowlist disabled when absent and accepts UUIDv4 pairs', () => {
+    const key = 'WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST';
+    const pair = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    expect(validateEnv({ NODE_ENV: 'test' })[key]).toBeUndefined();
+    expect(validateEnv({ [key]: pair })).toMatchObject({ [key]: pair });
+  });
+
+  it.each([
+    'not-a-pair',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:not-a-uuid',
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb,aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+  ])('rejects invalid future Billing pilot allowlist=%j', (value) => {
+    expect(() =>
+      validateEnv({
+        WHATSAPP_SUCCESSOR_PREPARATION_FUTURE_BILLING_PILOT_ALLOWLIST: value,
+      }),
+    ).toThrow('deve conter pares UUIDv4');
+  });
+
   it.each(['true', 'false'])('accepts PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED=%s', (value) => {
     expect(validateEnv({ PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: value })).toMatchObject({
       PHONE_INTERNATIONAL_CLIENT_WRITE_ENABLED: value,

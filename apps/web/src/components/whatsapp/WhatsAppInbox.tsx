@@ -1187,6 +1187,12 @@ export function WhatsAppInbox({
       media?: 'audio',
       { force = false }: { force?: boolean } = {},
     ) => {
+      const conversation =
+        selectedConversationRef.current?.id === conversationId
+          ? selectedConversationRef.current
+          : conversationsRef.current.find((item) => item.id === conversationId);
+      if (shouldSuppressPreparedSuccessorPresence(conversation)) return;
+
       const nextState: ConversationPresenceState =
         state === 'paused' ? 'paused' : media === 'audio' ? 'composing:audio' : 'composing:text';
       const transition = force
@@ -6562,6 +6568,12 @@ export function conversationComposerActionMode(
   sending: boolean,
 ) {
   return draft.trim() || selectedMedia || sending ? 'SEND' : 'VOICE';
+}
+
+export function shouldSuppressPreparedSuccessorPresence(
+  conversation: Pick<WhatsAppConversation, 'continuityPreparation'> | null | undefined,
+) {
+  return conversation?.continuityPreparation?.status === 'PREPARED';
 }
 
 function conversationFileExtension(fileName: string) {

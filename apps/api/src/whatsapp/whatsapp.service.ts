@@ -2996,6 +2996,15 @@ export class WhatsAppService {
       throw new NotFoundException('Conversa WhatsApp nao encontrada.');
     }
 
+    const predecessorPreparation =
+      await this.prisma.whatsAppConversationSuccessorPreparation.findUnique({
+        where: { predecessorConversationId: conversation.id },
+        select: { status: true },
+      });
+    if (predecessorPreparation?.status === 'PREPARED') {
+      return { success: false };
+    }
+
     await this.assertConversationIsCurrentOutboundTarget(conversation.id);
 
     if (conversation.provider !== 'KIRAGO') {

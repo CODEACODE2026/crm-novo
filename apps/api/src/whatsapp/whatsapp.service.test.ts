@@ -11507,6 +11507,65 @@ describe('WhatsAppService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('treats presence for a PREPARED predecessor as a safe no-op before using its old connection', async () => {
+    const predecessor = conversation({
+      whatsAppConnection: connection({
+        status: 'DISCONNECTED',
+        connected: false,
+        loggedIn: false,
+      }),
+    });
+    const { service, prisma, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(predecessor),
+        },
+        whatsAppConversationSuccessorPreparation: {
+          findUnique: vi.fn().mockResolvedValue({ status: 'PREPARED' }),
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(predecessor.id, { state: 'composing' }),
+    ).resolves.toEqual({ success: false });
+
+    expect(prisma.whatsAppConversationSuccessorPreparation.findUnique).toHaveBeenCalledWith({
+      where: { predecessorConversationId: predecessor.id },
+      select: { status: true },
+    });
+    expect(prisma.whatsAppConversationContinuity.findUnique).not.toHaveBeenCalled();
+    expect(provider.setChatPresence).not.toHaveBeenCalled();
+  });
+
+  it('keeps direct presence on a PREPARED successor blocked before provider calls', async () => {
+    const successor = conversation({
+      whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),
+    });
+    const preparationFindUnique = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'preparation-id', status: 'PREPARED' });
+    const { service, provider } = serviceFactory({
+      prismaOverrides: {
+        whatsAppConversation: {
+          findUnique: vi.fn().mockResolvedValue(successor),
+        },
+        whatsAppConversationSuccessorPreparation: {
+          findUnique: preparationFindUnique,
+        },
+      },
+    });
+
+    await expect(
+      service.setConversationPresence(successor.id, { state: 'composing' }),
+    ).rejects.toMatchObject({
+      response: { code: 'WHATSAPP_PREPARED_SUCCESSOR_CONFIRMATION_REQUIRED' },
+    });
+
+    expect(provider.setChatPresence).not.toHaveBeenCalled();
+  });
+
   it('treats provider presence failure as best effort', async () => {
     const targetConversation = conversation({
       whatsAppConnection: connection({ status: 'CONNECTED', connected: true, loggedIn: true }),

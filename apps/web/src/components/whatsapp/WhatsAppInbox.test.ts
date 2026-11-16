@@ -73,6 +73,7 @@ import {
   shouldApplyConversationListResponse,
   shouldReadVisibleConversationOnReturn,
   shouldRetryActiveConversationRead,
+  shouldSuppressPreparedSuccessorPresence,
   sortContactReferences,
   stopConversationPixCopyEvent,
   summarizeConversationReactions,
@@ -4279,5 +4280,36 @@ describe('WhatsAppInbox unread reconciliation helpers', () => {
       'A primeira mensagem da continuidade deve ser um novo texto simples',
     );
     expect(globalStylesSource).toContain('.conversation-prepared-continuity-notice {');
+  });
+
+  it('suppresses every presence transition while the predecessor remains PREPARED', () => {
+    expect(
+      shouldSuppressPreparedSuccessorPresence({
+        continuityPreparation: {
+          id: 'preparation-id',
+          status: 'PREPARED',
+          successorConversationId: 'successor-id',
+          targetConnectionId: 'target-id',
+        },
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressPreparedSuccessorPresence({
+        continuityPreparation: {
+          id: 'preparation-id',
+          status: 'ACTIVATED',
+          successorConversationId: 'successor-id',
+          targetConnectionId: 'target-id',
+        },
+      }),
+    ).toBe(false);
+    expect(shouldSuppressPreparedSuccessorPresence(null)).toBe(false);
+
+    const presenceBlock = whatsAppInboxSource.slice(
+      whatsAppInboxSource.indexOf('const sendConversationPresence'),
+      whatsAppInboxSource.indexOf('const clearPresencePauseTimer'),
+    );
+    expect(presenceBlock).toContain('shouldSuppressPreparedSuccessorPresence(conversation)');
+    expect(presenceBlock).not.toContain('setSendError');
   });
 });
